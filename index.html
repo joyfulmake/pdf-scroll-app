@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PDF Scroll Reader — scroll, listen, highlight, take notes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%93%96%3C/text%3E%3C/svg%3E" />
+<link rel="stylesheet" href="css/text-layer.css" />
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <div class="brand">📖 PDF Scroll Reader</div>
+
+    <label id="file-picker" class="btn primary">
+      Open document
+      <input type="file" id="file-input" accept=".pdf,.docx,.pptx,.txt,.md,application/pdf" hidden />
+    </label>
+
+    <div class="toolbar-group" id="scroll-controls" hidden>
+      <button id="play-pause" class="btn" title="Play / pause auto-scroll">▶ Play</button>
+      <label class="slider-label">
+        Speed
+        <input type="range" id="scroll-speed" min="10" max="400" value="60" step="10" />
+      </label>
+      <span id="speed-readout">60 px/s</span>
+    </div>
+
+    <div class="toolbar-group" id="voice-controls" hidden>
+      <button id="voice-play" class="btn" title="Read this page aloud">🔊 Read Aloud</button>
+      <button id="voice-stop" class="btn" title="Stop reading" disabled>⏹ Stop</button>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="progress-wrap" id="progress-wrap" hidden>
+      <input type="range" id="progress-bar" min="0" max="1000" value="0" />
+      <span id="page-readout">— / —</span>
+    </div>
+
+    <button id="export-video-btn" class="btn icon-btn" title="Export video" hidden>🎬</button>
+    <button id="tab-notes-btn" class="btn icon-btn" title="Notes">📝</button>
+    <button id="tab-settings-btn" class="btn icon-btn" title="Settings">⚙️</button>
+  </header>
+
+  <main id="layout">
+
+    <section id="reader-pane">
+      <div id="drop-zone">
+        <div class="drop-hint">
+          <p><strong>Drop a document here</strong> or use "Open document" above.</p>
+          <p class="muted small">Supports PDF, Word (.docx), PowerPoint (.pptx), and text/Markdown (.txt/.md).</p>
+          <p class="muted">Everything happens in your browser. Your file is never uploaded anywhere. Notes and highlights are kept only for this session — download them before you close the tab if you want to keep them.</p>
+        </div>
+      </div>
+      <div id="pages-container"></div>
+
+      <div id="selection-toolbar" hidden>
+        <button id="ask-ai-btn" class="btn small">✨ Ask AI about this</button>
+        <button id="note-selection-btn" class="btn small">📝 Add to notes</button>
+        <button id="read-selection-btn" class="btn small">🔊 Read this</button>
+      </div>
+    </section>
+
+    <aside id="side-panel" hidden>
+
+      <div id="panel-notes" class="panel">
+        <div class="panel-header">
+          <h2>Notes &amp; AI log</h2>
+          <span class="muted small">Session only — not saved after you close this tab</span>
+        </div>
+
+        <div class="panel-body">
+          <textarea id="notes-text" placeholder="Type your own notes here… AI answers and summaries you save will also appear below them."></textarea>
+
+          <div id="ai-panel">
+            <div class="ai-panel-header">
+              <h3>AI</h3>
+              <div id="ai-status" class="muted small"></div>
+            </div>
+            <div id="ai-output" class="ai-output" aria-live="polite"></div>
+            <div class="ai-actions">
+              <button id="ai-save-btn" class="btn small" disabled>Save to notes</button>
+              <button id="ai-read-btn" class="btn small" disabled>🔊 Read back</button>
+            </div>
+            <div class="summarize-row">
+              <select id="summarize-scope">
+                <option value="page">Summarize current page</option>
+                <option value="document">Summarize whole document</option>
+              </select>
+              <button id="summarize-btn" class="btn small" disabled>Summarize</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-footer">
+          <button id="notes-download-btn" class="btn small">⬇ Download notes (.md)</button>
+          <button id="notes-clear-btn" class="btn small danger">Clear</button>
+        </div>
+      </div>
+
+      <div id="panel-settings" class="panel" hidden>
+        <div class="panel-header">
+          <h2>Settings</h2>
+        </div>
+        <div class="panel-body">
+
+          <fieldset>
+            <legend>AI (Claude)</legend>
+            <label class="field">
+              Anthropic API key
+              <input type="password" id="api-key-input" placeholder="sk-ant-…" autocomplete="off" />
+            </label>
+            <p class="muted small">
+              Stored only in this tab's memory for this session — never written to disk, never sent anywhere except directly from your browser to Anthropic's API. Required only for "Ask AI" and "Summarize"; everything else works without it, offline.
+            </p>
+            <label class="field">
+              Model
+              <select id="model-select">
+                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fastest / cheapest)</option>
+                <option value="claude-sonnet-5" selected>Claude Sonnet 5 (balanced)</option>
+                <option value="claude-opus-5">Claude Opus 5 (highest quality)</option>
+              </select>
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Voice</legend>
+            <label class="field">
+              Voice
+              <select id="voice-select"></select>
+            </label>
+            <label class="field">
+              Rate
+              <input type="range" id="voice-rate" min="0.5" max="2" step="0.1" value="1" />
+              <span id="voice-rate-readout">1.0×</span>
+            </label>
+            <label class="field">
+              Pitch
+              <input type="range" id="voice-pitch" min="0" max="2" step="0.1" value="1" />
+              <span id="voice-pitch-readout">1.0</span>
+            </label>
+            <label class="field checkbox">
+              <input type="checkbox" id="voice-auto-scroll" checked />
+              Auto-scroll to follow along while reading aloud
+            </label>
+          </fieldset>
+
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <div id="toast" hidden></div>
+
+  <div id="export-modal" class="modal-overlay" hidden>
+    <div class="modal">
+      <h2>Export video</h2>
+      <p class="muted small">Scrolls the whole document into a downloadable video with your microphone narrating live. Works fully offline. Output is .webm — natively playable on LinkedIn and most social platforms.</p>
+
+      <div id="export-form">
+        <label class="field">
+          Format
+          <select id="export-aspect">
+            <option value="square">Square 1:1 — LinkedIn feed</option>
+            <option value="vertical">Vertical 9:16 — Stories/Reels</option>
+            <option value="landscape">Landscape 16:9</option>
+          </select>
+        </label>
+        <label class="field">
+          Scroll speed <span id="export-speed-readout" class="muted small">40 px/s</span>
+          <input type="range" id="export-speed" min="10" max="200" value="40" step="5" />
+        </label>
+        <label class="field checkbox"><input type="checkbox" id="export-title-card" checked /> Title card intro</label>
+        <label class="field checkbox"><input type="checkbox" id="export-captions" checked /> Burned-in captions (synced to scroll position)</label>
+        <label class="field checkbox"><input type="checkbox" id="export-mic" checked /> Narrate live via microphone while recording</label>
+        <label class="field checkbox"><input type="checkbox" id="export-music-toggle" /> Add background music</label>
+        <label class="field" id="export-music-field" hidden>
+          Music file (mp3/wav, your own — mixed in quietly under narration)
+          <input type="file" id="export-music-file" accept="audio/*" />
+        </label>
+      </div>
+
+      <div class="modal-actions">
+        <button id="export-start-btn" class="btn primary">Start recording</button>
+        <button id="export-cancel-btn" class="btn">Cancel</button>
+      </div>
+
+      <div id="export-live" hidden>
+        <canvas id="export-canvas"></canvas>
+        <div id="export-status" class="muted small"></div>
+        <button id="export-stop-btn" class="btn danger">Stop &amp; save</button>
+      </div>
+
+      <div id="export-result" hidden>
+        <video id="export-preview-video" controls></video>
+        <div class="modal-actions">
+          <a id="export-download-link" class="btn primary" download="reading-video.webm">⬇ Download video</a>
+          <button id="export-close-btn" class="btn">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="vendor/mammoth/mammoth.browser.min.js"></script>
+<script src="vendor/jszip/jszip.min.js"></script>
+<script src="vendor/marked/marked.min.js"></script>
+<script src="vendor/html2canvas/html2canvas.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

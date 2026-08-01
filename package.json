@@ -1,0 +1,14 @@
+{
+  "name": "pdf-scroll-app",
+  "version": "1.0.0",
+  "description": "Browser-only reader that turns PDF/DOCX/PPTX/TXT/MD documents into a scrolling, narrated, AI-assisted reading experience — and can export a narrated scroll as a video.",
+  "private": true,
+  "scripts": {
+    "serve": "python3 -m http.server 8934",
+    "test": "node test/smoke.mjs"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "playwright-core": "^1.62.1"
+  }
+}

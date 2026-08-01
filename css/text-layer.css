@@ -1,0 +1,51 @@
+/* Vendored subset of pdf.js's pdf_viewer.css text-layer rules (pdfjs-dist).
+   Required for selectable/highlightable text over rendered PDF canvases. */
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+}
+
+.textLayer.highlighting {
+  touch-action: none;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+}
+
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+
+.textLayer span[role="img"] {
+  user-select: none;
+  cursor: default;
+}
+
+.textLayer ::-moz-selection {
+  background: rgba(0 0 255 / 0.25);
+}
+.textLayer ::selection {
+  background: rgba(0 100 255 / 0.3);
+}
