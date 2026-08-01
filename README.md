@@ -23,7 +23,7 @@ Then open `http://localhost:8934/`.
 - **Highlight → Ask AI** — select any text to get a floating toolbar: ask Claude to explain the passage, add it straight to your notes, or have it read back to you.
 - **Summarize** — current section or the whole document, via Claude (long documents are chunked and combined automatically).
 - **Notes** — a free-text panel plus your saved AI answers/summaries, session-only by design (see below). Download as Markdown any time; closing the tab clears it for good.
-- **Export video** — renders the whole document into a downloadable `.webm` video (square/vertical/landscape), with your live microphone narration, an optional title card, scroll-synced burned-in captions, and an optional quiet background music bed. `.webm` is natively supported on LinkedIn and most social platforms.
+- **Export video** — renders the whole document into a downloadable `.webm` video (square/vertical/landscape), with your live microphone narration, an optional title card, scroll-synced burned-in captions, and an optional quiet background music bed. Choose from three animation styles (smooth scroll, smooth scroll with a slow Ken Burns zoom, or slide-by-slide with crossfades — best for slide decks) and four visual themes (Classic, Midnight, Sunrise, Mono) that color the title card and caption bar. Scroll speed defaults to whatever you've currently set for on-screen reading. `.webm` is natively supported on LinkedIn and most social platforms.
 
 ## What's session-only vs. what needs the internet
 

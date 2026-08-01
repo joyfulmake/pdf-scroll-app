@@ -171,8 +171,26 @@
           </select>
         </label>
         <label class="field">
+          Animation
+          <select id="export-animation">
+            <option value="scroll">Smooth scroll</option>
+            <option value="scrollZoom">Smooth scroll + slow zoom</option>
+            <option value="slides">Slide-by-slide (crossfade)</option>
+          </select>
+        </label>
+        <label class="field">
+          Theme
+          <select id="export-theme">
+            <option value="classic">Classic (purple)</option>
+            <option value="midnight">Midnight (dark, minimal)</option>
+            <option value="sunrise">Sunrise (warm, energetic)</option>
+            <option value="mono">Mono (grayscale, corporate)</option>
+          </select>
+        </label>
+        <label class="field" id="export-speed-field">
           Scroll speed <span id="export-speed-readout" class="muted small">40 px/s</span>
-          <input type="range" id="export-speed" min="10" max="200" value="40" step="5" />
+          <input type="range" id="export-speed" min="10" max="400" value="40" step="10" />
+          <span class="muted small">Defaults to your current reading scroll speed — adjust here just for this export.</span>
         </label>
         <label class="field checkbox"><input type="checkbox" id="export-title-card" checked /> Title card intro</label>
         <label class="field checkbox"><input type="checkbox" id="export-captions" checked /> Burned-in captions (synced to scroll position)</label>

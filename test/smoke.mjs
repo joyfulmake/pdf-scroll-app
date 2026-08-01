@@ -65,6 +65,28 @@ await step("Export video modal opens/closes", async () => {
   if (!hiddenAfter) throw new Error("modal did not close");
 });
 
+await step("Export speed defaults to the current reading scroll speed", async () => {
+  await page.fill("#scroll-speed", "150");
+  await page.dispatchEvent("#scroll-speed", "input");
+  await page.click("#export-video-btn", { timeout: 4000 });
+  const exportSpeed = await page.$eval("#export-speed", (el) => el.value);
+  if (exportSpeed !== "150") throw new Error(`expected export speed 150, got ${exportSpeed}`);
+  await page.click("#export-cancel-btn", { timeout: 4000 });
+  await page.fill("#scroll-speed", "60");
+  await page.dispatchEvent("#scroll-speed", "input");
+});
+
+await step("Slide-by-slide animation mode hides the speed field", async () => {
+  await page.click("#export-video-btn", { timeout: 4000 });
+  await page.selectOption("#export-animation", "slides");
+  const hidden = await page.$eval("#export-speed-field", (el) => el.hidden);
+  if (!hidden) throw new Error("speed field should be hidden in slide mode");
+  await page.selectOption("#export-animation", "scroll");
+  const shownAgain = await page.$eval("#export-speed-field", (el) => !el.hidden);
+  if (!shownAgain) throw new Error("speed field should reappear in scroll mode");
+  await page.click("#export-cancel-btn", { timeout: 4000 });
+});
+
 await step("Load plain text doc with real prose", async () => {
   const fileInput = await page.$("#file-input");
   await fileInput.setInputFiles(SAMPLE_TXT);
@@ -171,22 +193,27 @@ await step("PPTX loads via JSZip with slide cards", async () => {
   if (!firstTitle.includes("Welcome to the Sample Deck")) throw new Error(`unexpected slide title: ${firstTitle}`);
 });
 
-await step("Video export produces a playable webm blob", async () => {
-  const fileInput = await page.$("#file-input");
-  await fileInput.setInputFiles("/tmp/sample.txt");
-  await page.waitForFunction(() => !document.getElementById("scroll-controls").hidden, { timeout: 20000 });
+for (const animation of ["scroll", "scrollZoom", "slides"]) {
+  await step(`Video export produces a playable webm blob (${animation}, sunrise theme)`, async () => {
+    const fileInput = await page.$("#file-input");
+    await fileInput.setInputFiles("/tmp/sample.txt");
+    await page.waitForFunction(() => !document.getElementById("scroll-controls").hidden, { timeout: 20000 });
 
-  await page.click("#export-video-btn", { timeout: 4000 });
-  await page.uncheck("#export-mic"); // headless has no real mic audio; test the video pipeline itself
-  await page.click("#export-start-btn", { timeout: 4000 });
+    await page.click("#export-video-btn", { timeout: 4000 });
+    await page.uncheck("#export-mic"); // headless has no real mic audio; test the video pipeline itself
+    await page.selectOption("#export-animation", animation);
+    await page.selectOption("#export-theme", "sunrise");
+    if (animation !== "slides") await page.fill("#export-speed", "400"); // keep test fast
+    await page.click("#export-start-btn", { timeout: 4000 });
 
-  await page.waitForSelector("#export-result:not([hidden])", { timeout: 30000 });
-  const videoInfo = await page.$eval("#export-preview-video", (el) => ({
-    hasSrc: !!el.src && el.src.startsWith("blob:"),
-  }));
-  if (!videoInfo.hasSrc) throw new Error("export video element has no blob src");
-  await page.click("#export-close-btn", { timeout: 4000 });
-});
+    await page.waitForSelector("#export-result:not([hidden])", { timeout: 40000 });
+    const videoInfo = await page.$eval("#export-preview-video", (el) => ({
+      hasSrc: !!el.src && el.src.startsWith("blob:"),
+    }));
+    if (!videoInfo.hasSrc) throw new Error("export video element has no blob src");
+    await page.click("#export-close-btn", { timeout: 4000 });
+  });
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log("\n--- Console/page errors captured ---");

@@ -321,8 +321,14 @@ const exportMusicToggle = $("export-music-toggle");
 const exportMusicField = $("export-music-field");
 const exportSpeedSlider = $("export-speed");
 const exportSpeedReadout = $("export-speed-readout");
+const exportSpeedField = $("export-speed-field");
+const exportAnimationSelect = $("export-animation");
 
 let exportCancelToken = null;
+
+function syncExportSpeedFieldVisibility() {
+  exportSpeedField.hidden = exportAnimationSelect.value === "slides";
+}
 
 exportVideoBtn.addEventListener("click", () => {
   if (!currentDoc) return;
@@ -331,11 +337,16 @@ exportVideoBtn.addEventListener("click", () => {
   document.querySelector("#export-modal .modal-actions").hidden = false;
   exportLive.hidden = true;
   exportResult.hidden = true;
+  // Default the export's scroll speed to whatever the reading pane is currently set to.
+  exportSpeedSlider.value = scrollPlayer.speed;
+  exportSpeedReadout.textContent = `${scrollPlayer.speed} px/s`;
+  syncExportSpeedFieldVisibility();
 });
 $("export-cancel-btn").addEventListener("click", () => { exportModal.hidden = true; });
 $("export-close-btn").addEventListener("click", () => { exportModal.hidden = true; });
 exportMusicToggle.addEventListener("change", () => { exportMusicField.hidden = !exportMusicToggle.checked; });
 exportSpeedSlider.addEventListener("input", () => { exportSpeedReadout.textContent = `${exportSpeedSlider.value} px/s`; });
+exportAnimationSelect.addEventListener("change", syncExportSpeedFieldVisibility);
 
 $("export-start-btn").addEventListener("click", async () => {
   exportForm.hidden = true;
@@ -351,6 +362,8 @@ $("export-start-btn").addEventListener("click", async () => {
       doc: currentDoc,
       previewCanvas: exportCanvas,
       aspect: $("export-aspect").value,
+      animation: exportAnimationSelect.value,
+      theme: $("export-theme").value,
       speed: parseFloat(exportSpeedSlider.value),
       wantTitleCard: $("export-title-card").checked,
       wantCaptions: $("export-captions").checked,
