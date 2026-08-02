@@ -1,0 +1,12 @@
+.git/
+.github/
+.wrangler/
+.claude/
+node_modules/
+test/
+wrangler.jsonc
+.assetsignore
+.gitignore
+package.json
+package-lock.json
+README.md
