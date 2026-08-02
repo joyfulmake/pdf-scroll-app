@@ -50,9 +50,31 @@
     <section id="reader-pane">
       <div id="drop-zone">
         <div class="drop-hint">
-          <p><strong>Drop a document here</strong> or use "Open document" above.</p>
-          <p class="muted small">Supports PDF, Word (.docx), PowerPoint (.pptx), text/Markdown (.txt/.md), and HTML (.html/.htm).</p>
-          <p class="muted">Everything happens in your browser. Your file is never uploaded anywhere. Notes and highlights are kept only for this session — download them before you close the tab if you want to keep them.</p>
+          <div class="drop-icon">📖</div>
+          <h1>Turn any document into something you can watch and listen to</h1>
+          <p class="drop-sub">Drop a file here, or use <strong>Open document</strong> above.</p>
+          <p class="muted small drop-formats">PDF · Word (.docx) · PowerPoint (.pptx) · Text/Markdown · HTML</p>
+
+          <div class="feature-grid">
+            <div class="feature-card">
+              <span class="feature-icon">🎞️</span>
+              <div><strong>Scrolling video mode</strong><span class="muted small">Smooth auto-scroll, adjustable speed</span></div>
+            </div>
+            <div class="feature-card">
+              <span class="feature-icon">🔊</span>
+              <div><strong>Read aloud</strong><span class="muted small">Free offline voice, follows along</span></div>
+            </div>
+            <div class="feature-card">
+              <span class="feature-icon">✨</span>
+              <div><strong>Highlight → Ask AI</strong><span class="muted small">Explanations &amp; summaries, built in</span></div>
+            </div>
+            <div class="feature-card">
+              <span class="feature-icon">🎬</span>
+              <div><strong>Export as video</strong><span class="muted small">Narrated, themed, ready to share</span></div>
+            </div>
+          </div>
+
+          <p class="muted small privacy-note">🔒 Everything happens in your browser — your file is never uploaded. Notes are session-only; download them before closing the tab.</p>
         </div>
       </div>
       <div id="pages-container"></div>
@@ -68,7 +90,7 @@
 
       <div id="panel-notes" class="panel">
         <div class="panel-header">
-          <h2>Notes &amp; AI log</h2>
+          <h2>📝 Notes &amp; AI log</h2>
           <span class="muted small">Session only — not saved after you close this tab</span>
         </div>
 
@@ -103,28 +125,17 @@
 
       <div id="panel-settings" class="panel" hidden>
         <div class="panel-header">
-          <h2>Settings</h2>
+          <h2>⚙️ Settings</h2>
         </div>
         <div class="panel-body">
 
-          <fieldset>
-            <legend>AI (Claude)</legend>
-            <label class="field">
-              Anthropic API key
-              <input type="password" id="api-key-input" placeholder="sk-ant-…" autocomplete="off" />
-            </label>
-            <p class="muted small">
-              Stored only in this tab's memory for this session — never written to disk, never sent anywhere except directly from your browser to Anthropic's API. Required only for "Ask AI" and "Summarize"; everything else works without it, offline.
-            </p>
-            <label class="field">
-              Model
-              <select id="model-select">
-                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fastest / cheapest)</option>
-                <option value="claude-sonnet-5" selected>Claude Sonnet 5 (balanced)</option>
-                <option value="claude-opus-5">Claude Opus 5 (highest quality)</option>
-              </select>
-            </label>
-          </fieldset>
+          <div class="ai-info-card">
+            <span class="ai-info-icon">✨</span>
+            <div>
+              <strong>AI is ready to go</strong>
+              <p class="muted small">"Ask AI" and "Summarize" run on a free, built-in model — nothing to configure, no key to paste in. Everything else on this page (reading, scrolling, voice, notes, video export) already works fully offline either way.</p>
+            </div>
+          </div>
 
           <fieldset>
             <legend>Voice</legend>
@@ -158,7 +169,7 @@
 
   <div id="export-modal" class="modal-overlay" hidden>
     <div class="modal">
-      <h2>Export video</h2>
+      <h2>🎬 Export video</h2>
       <p class="muted small">Scrolls the whole document into a downloadable video with your microphone narrating live. Works fully offline. Output is .webm — natively playable on LinkedIn and most social platforms.</p>
 
       <div id="export-form">

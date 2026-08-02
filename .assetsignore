@@ -4,6 +4,7 @@
 .claude/
 node_modules/
 test/
+src/
 wrangler.jsonc
 .assetsignore
 .gitignore

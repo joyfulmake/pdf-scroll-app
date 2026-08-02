@@ -6,7 +6,6 @@ import { loadHtml } from "./loaders/htmlLoader.js";
 import { ScrollPlayer } from "./scrollPlayer.js";
 import { VoiceReader } from "./voiceReader.js";
 import { NotesPanel } from "./notes.js";
-import { Settings } from "./settings.js";
 import { explainSelection, summarizeText } from "./aiClient.js";
 import { exportVideo } from "./videoExport.js";
 import { showToast } from "./utils.js";
@@ -31,12 +30,7 @@ const readSelectionBtn = $("read-selection-btn");
 let currentDoc = null;
 let pendingSelectionText = "";
 
-// ---------- Settings / Notes ----------
-
-const settings = new Settings({
-  apiKeyInput: $("api-key-input"),
-  modelSelect: $("model-select"),
-});
+// ---------- Notes ----------
 
 const notes = new NotesPanel({
   textarea: $("notes-text"),
@@ -261,22 +255,13 @@ function setAiOutput(heading, text) {
   aiReadBtn.disabled = !text;
 }
 
-function requireApiKey() {
-  if (!settings.hasApiKey()) {
-    showToast("Add your Anthropic API key in Settings (⚙️) to use AI features.");
-    showPanel("settings");
-    return false;
-  }
-  return true;
-}
-
 askAiBtn.addEventListener("click", async () => {
-  if (!pendingSelectionText || !requireApiKey()) return;
+  if (!pendingSelectionText) return;
   showPanel("notes");
   aiStatus.textContent = "Thinking…";
   setAiOutput("AI explanation", "");
   try {
-    const answer = await explainSelection(settings.apiKey, settings.model, pendingSelectionText, contextForSelection());
+    const answer = await explainSelection(pendingSelectionText, contextForSelection());
     setAiOutput(`AI explanation of: "${pendingSelectionText.slice(0, 60)}${pendingSelectionText.length > 60 ? "…" : ""}"`, answer);
     aiStatus.textContent = "";
   } catch (err) {
@@ -285,7 +270,7 @@ askAiBtn.addEventListener("click", async () => {
 });
 
 summarizeBtn.addEventListener("click", async () => {
-  if (!currentDoc || !requireApiKey()) return;
+  if (!currentDoc) return;
   const scope = summarizeScope.value;
   const text = scope === "document"
     ? currentDoc.textBlocks.map((b) => b.text).join("\n\n")
@@ -298,7 +283,7 @@ summarizeBtn.addEventListener("click", async () => {
 
   setAiOutput("Summary", "");
   try {
-    const summary = await summarizeText(settings.apiKey, settings.model, text, {
+    const summary = await summarizeText(text, {
       title: currentDoc.title,
       onProgress: (step, total) => { aiStatus.textContent = total > 1 ? `Summarizing… (${step}/${total})` : "Summarizing…"; },
     });

@@ -2,6 +2,8 @@ import { chromium } from "playwright-core";
 
 const SAMPLE_PDF = "/usr/share/doc/fonts-lmodern/lm-info.pdf";
 const SAMPLE_TXT = "/tmp/sample.txt";
+const BASE_URL = "http://localhost:8934";
+const isLocalStaticServer = BASE_URL.includes("localhost");
 
 const browser = await chromium.launch({
   executablePath: "/usr/bin/chromium",
@@ -32,7 +34,7 @@ async function step(name, fn) {
   }
 }
 
-await page.goto("http://localhost:8934/index.html");
+await page.goto(`${BASE_URL}/index.html`);
 await page.waitForTimeout(400);
 
 await step("PDF loads and renders pages", async () => {
@@ -125,11 +127,12 @@ await step("Notes download produces a file", async () => {
   if (!filename.endsWith(".md")) throw new Error(`unexpected filename ${filename}`);
 });
 
-await step("Settings save API key to sessionStorage only", async () => {
+await step("Settings panel shows the AI-is-ready info card, no key field", async () => {
   await page.click("#tab-settings-btn", { timeout: 4000 });
-  await page.fill("#api-key-input", "sk-ant-test-fake-key");
-  const saved = await page.evaluate(() => sessionStorage.getItem("pdfScrollApp.apiKey"));
-  if (saved !== "sk-ant-test-fake-key") throw new Error(`got ${JSON.stringify(saved)}`);
+  const hasKeyInput = await page.$("#api-key-input");
+  if (hasKeyInput) throw new Error("API key input should no longer exist");
+  const cardText = await page.$eval(".ai-info-card", (el) => el.textContent).catch(() => "");
+  if (!cardText.toLowerCase().includes("ready")) throw new Error("expected AI-ready info card");
 });
 
 await step("Selecting text shows the selection toolbar", async () => {
@@ -151,8 +154,11 @@ await step("Read-selection button speaks without crashing", async () => {
   await page.waitForTimeout(300);
 });
 
-await step("Ask AI without a key redirects to Settings with a toast", async () => {
-  await page.evaluate(() => sessionStorage.removeItem("pdfScrollApp.apiKey"));
+await step("Ask AI returns a real answer from the server-side model", async () => {
+  if (isLocalStaticServer) {
+    console.log("  SKIP (local static file server has no /api/ai/* routes — only the deployed Worker does)");
+    return;
+  }
   await page.reload();
   await page.waitForTimeout(400);
   const fileInput = await page.$("#file-input");
@@ -168,9 +174,26 @@ await step("Ask AI without a key redirects to Settings with a toast", async () =
   await page.waitForFunction(() => !document.getElementById("selection-toolbar").hidden, { timeout: 2000 });
   await page.click("#ask-ai-btn", { timeout: 4000 });
   await page.waitForFunction(
-    () => !document.getElementById("panel-settings").hidden,
-    { timeout: 2000 }
+    () => document.getElementById("ai-output").textContent.trim().length > 0,
+    { timeout: 20000 }
   );
+  const answer = await page.$eval("#ai-output", (el) => el.textContent);
+  if (answer.length < 10) throw new Error(`AI answer looked too short: ${JSON.stringify(answer)}`);
+});
+
+await step("Summarize returns a real summary from the server-side model", async () => {
+  if (isLocalStaticServer) {
+    console.log("  SKIP (local static file server has no /api/ai/* routes — only the deployed Worker does)");
+    return;
+  }
+  await page.selectOption("#summarize-scope", "document");
+  await page.click("#summarize-btn", { timeout: 4000 });
+  await page.waitForFunction(
+    () => document.getElementById("ai-output").textContent.trim().length > 0,
+    { timeout: 20000 }
+  );
+  const summary = await page.$eval("#ai-output", (el) => el.textContent);
+  if (summary.length < 10) throw new Error(`summary looked too short: ${JSON.stringify(summary)}`);
 });
 
 await step("DOCX loads via mammoth with multiple paragraphs", async () => {
