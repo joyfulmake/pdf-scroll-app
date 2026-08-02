@@ -25,11 +25,17 @@ async function readRelMap(zip, slidePath) {
   return map;
 }
 
-function shapeIsTitle(sp) {
+// Real-world slides frequently omit an explicit type="title" and rely on the slide
+// layout to supply it via idx="0" — Google Slides, Canva, and even some PowerPoint
+// versions export this way. Without this fallback, those decks would have no
+// detected title at all, and everything (title included) would flatten into one
+// undifferentiated bullet list per slide.
+function shapeIsExplicitTitle(sp) {
   const ph = sp.getElementsByTagName("p:ph")[0];
   if (!ph) return false;
   const type = ph.getAttribute("type") || "";
-  return type === "title" || type === "ctrTitle";
+  if (type === "title" || type === "ctrTitle") return true;
+  return !type && ph.getAttribute("idx") === "0";
 }
 
 function shapeText(sp) {
@@ -55,17 +61,21 @@ export async function loadPptx(arrayBuffer, container, filenameNoExt) {
     const xml = new DOMParser().parseFromString(xmlText, "application/xml");
     const shapes = Array.from(xml.getElementsByTagName("p:sp"));
 
+    const shapesWithText = shapes
+      .map((sp) => ({ lines: shapeText(sp), isExplicitTitle: shapeIsExplicitTitle(sp) }))
+      .filter((s) => s.lines.length);
+
+    // Prefer an explicitly-marked title placeholder; if no shape on this slide has
+    // one (freeform text boxes only, no layout placeholders), fall back to treating
+    // the first text-bearing shape as the title rather than losing structure entirely.
+    const explicitIdx = shapesWithText.findIndex((s) => s.isExplicitTitle);
     let title = "";
     const bodyLines = [];
-    for (const sp of shapes) {
-      const lines = shapeText(sp);
-      if (!lines.length) continue;
-      if (shapeIsTitle(sp) && !title) {
-        title = lines.join(" ");
-      } else {
-        bodyLines.push(...lines);
-      }
-    }
+    shapesWithText.forEach((s, i) => {
+      const useAsTitle = !title && (explicitIdx >= 0 ? i === explicitIdx : i === 0);
+      if (useAsTitle) title = s.lines.join(" ");
+      else bodyLines.push(...s.lines);
+    });
 
     const relMap = await readRelMap(zip, path);
     const blips = Array.from(xml.getElementsByTagName("a:blip")).slice(0, 3);

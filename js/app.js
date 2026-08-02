@@ -135,6 +135,9 @@ async function loadFile(file) {
       doc = await loadText(await file.text(), false, pagesContainer, nameNoExt);
     } else if (ext === "html" || ext === "htm") {
       doc = await loadHtml(await file.text(), pagesContainer, nameNoExt);
+    } else if (ext === "doc" || ext === "ppt") {
+      showToast(`Legacy .${ext} (Office 97–2003) isn't supported — please save/export as .${ext === "doc" ? "docx" : "pptx"} and try again.`, 5000);
+      return;
     } else {
       showToast("Unsupported file type — use PDF, DOCX, PPTX, TXT, MD, or HTML.");
       return;

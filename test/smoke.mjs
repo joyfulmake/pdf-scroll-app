@@ -193,6 +193,22 @@ await step("PPTX loads via JSZip with slide cards", async () => {
   if (!firstTitle.includes("Welcome to the Sample Deck")) throw new Error(`unexpected slide title: ${firstTitle}`);
 });
 
+await step("PPTX title detected even without explicit type=\"title\" (real-world export quirk)", async () => {
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample-realistic.pptx");
+  await page.waitForSelector(".slide-page", { timeout: 20000 });
+  const hasH2 = await page.$eval(".slide-page", (el) => !!el.querySelector("h2"));
+  const title = await page.$eval(".slide-page h2", (el) => el.textContent).catch(() => null);
+  const bodyItems = await page.$$eval(".slide-page li", (els) => els.map((e) => e.textContent));
+  if (!hasH2 || !title.includes("Untyped Title Slide")) {
+    throw new Error(`expected title "Untyped Title Slide" to be detected, got: ${JSON.stringify(title)}`);
+  }
+  if (bodyItems.some((t) => t.includes("Untyped Title Slide"))) {
+    throw new Error("title text leaked into body bullets — title/body split failed");
+  }
+  if (bodyItems.length !== 2) throw new Error(`expected 2 body bullets, got ${bodyItems.length}`);
+});
+
 await step("HTML loads with content rendered and scripts/handlers stripped", async () => {
   await page.evaluate(() => { delete window.__pwned; delete window.__pwned2; delete window.__pwned3; });
   const fileInput = await page.$("#file-input");
