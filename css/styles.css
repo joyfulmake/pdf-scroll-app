@@ -29,6 +29,12 @@
 
 * { box-sizing: border-box; }
 
+/* The `hidden` attribute must always win over any component's own `display`
+   rule (flex/grid/etc.) — without this, any class that sets `display` on a
+   hideable element silently un-hides it, since attribute and class selectors
+   have equal specificity and author CSS loads after the UA stylesheet. */
+[hidden] { display: none !important; }
+
 html, body {
   height: 100%;
   margin: 0;
@@ -456,9 +462,6 @@ legend {
   align-items: center;
   justify-content: center;
   z-index: 200;
-}
-.modal-overlay[hidden] {
-  display: none;
 }
 
 .modal {

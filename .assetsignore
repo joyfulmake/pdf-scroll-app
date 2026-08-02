@@ -5,6 +5,7 @@
 node_modules/
 test/
 src/
+functions/
 wrangler.jsonc
 .assetsignore
 .gitignore

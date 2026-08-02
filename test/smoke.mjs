@@ -37,6 +37,26 @@ async function step(name, fn) {
 await page.goto(`${BASE_URL}/index.html`);
 await page.waitForTimeout(400);
 
+// The `hidden` attribute is easy to silently defeat: any CSS class that sets its own
+// `display` on the same element (flex/grid/etc.) wins over the UA's `[hidden]{display:
+// none}` rule unless the stylesheet explicitly re-asserts it. Checking el.hidden (the
+// IDL property) only proves the ATTRIBUTE is present — not that anything is actually
+// invisible on screen. Assert real rendered visibility here so that class of bug can't
+// silently return.
+async function assertActuallyHidden(selector) {
+  const isVisible = await page.$eval(selector, (el) => {
+    const style = getComputedStyle(el);
+    return style.display !== "none" && el.offsetParent !== null;
+  }).catch(() => false);
+  if (isVisible) throw new Error(`${selector} has [hidden] set but is still visibly rendered`);
+}
+
+await step("Initially-hidden elements are actually not rendered (not just attribute-hidden)", async () => {
+  for (const sel of ["#scroll-controls", "#voice-controls", "#progress-wrap", "#export-video-btn", "#selection-toolbar", "#side-panel", "#export-modal"]) {
+    await assertActuallyHidden(sel);
+  }
+});
+
 await step("PDF loads and renders pages", async () => {
   const fileInput = await page.$("#file-input");
   await fileInput.setInputFiles(SAMPLE_PDF);
@@ -133,6 +153,12 @@ await step("Settings panel shows the AI-is-ready info card, no key field", async
   if (hasKeyInput) throw new Error("API key input should no longer exist");
   const cardText = await page.$eval(".ai-info-card", (el) => el.textContent).catch(() => "");
   if (!cardText.toLowerCase().includes("ready")) throw new Error("expected AI-ready info card");
+});
+
+await step("Only one side-panel tab is visible at a time (not stacked)", async () => {
+  await assertActuallyHidden("#panel-notes"); // settings tab open from previous step
+  const settingsVisible = await page.$eval("#panel-settings", (el) => getComputedStyle(el).display !== "none" && el.offsetParent !== null);
+  if (!settingsVisible) throw new Error("expected #panel-settings to be visible");
 });
 
 await step("Selecting text shows the selection toolbar", async () => {
