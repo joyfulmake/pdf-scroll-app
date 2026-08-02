@@ -193,6 +193,34 @@ await step("PPTX loads via JSZip with slide cards", async () => {
   if (!firstTitle.includes("Welcome to the Sample Deck")) throw new Error(`unexpected slide title: ${firstTitle}`);
 });
 
+await step("DOCX/TXT get split into multiple slides in slide mode (not squeezed into one)", async () => {
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample-long.txt");
+  await page.waitForSelector(".doc-flow-page", { timeout: 20000 });
+  const paragraphCount = await page.$$eval(".text-block", (els) => els.length);
+  if (paragraphCount < 3) throw new Error(`fixture too short to test grouping (${paragraphCount} paragraphs)`);
+
+  await page.click("#export-video-btn", { timeout: 4000 });
+  await page.uncheck("#export-mic");
+  await page.selectOption("#export-animation", "slides");
+
+  let maxSlideTotal = 1;
+  const statusHandle = setInterval(async () => {
+    try {
+      const text = await page.$eval("#export-status", (el) => el.textContent);
+      const m = text.match(/slide \d+\/(\d+)/);
+      if (m) maxSlideTotal = Math.max(maxSlideTotal, parseInt(m[1], 10));
+    } catch { /* modal may have closed */ }
+  }, 200);
+
+  await page.click("#export-start-btn", { timeout: 4000 });
+  await page.waitForSelector("#export-result:not([hidden])", { timeout: 90000 });
+  clearInterval(statusHandle);
+  await page.click("#export-close-btn", { timeout: 4000 });
+
+  if (maxSlideTotal <= 1) throw new Error(`expected multiple slides for a ${paragraphCount}-paragraph doc, got ${maxSlideTotal}`);
+});
+
 for (const animation of ["scroll", "scrollZoom", "slides"]) {
   await step(`Video export produces a playable webm blob (${animation}, sunrise theme)`, async () => {
     const fileInput = await page.$("#file-input");

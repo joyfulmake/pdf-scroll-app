@@ -1,9 +1,16 @@
-// Renders the currently-loaded document (any supported format — PDF, DOCX, PPTX,
-// TXT/MD all go through this the same way, since they all end up as stacked .doc-page
-// elements) into a tall offscreen "filmstrip" image, then plays a scripted animation of
-// it on an export canvas while MediaRecorder captures it — combined with your
-// microphone narration (and an optional quiet music bed) — into a downloadable .webm
-// video. .webm is a natively-supported upload format on LinkedIn and most social platforms.
+// Renders the currently-loaded document (PDF, DOCX, PPTX, TXT/MD all go through this
+// the same way) into a tall offscreen "filmstrip" image, then plays a scripted
+// animation of it on an export canvas while MediaRecorder captures it — combined with
+// your microphone narration (and an optional quiet music bed) — into a downloadable
+// .webm video. .webm is a natively-supported upload format on LinkedIn and most social
+// platforms.
+//
+// PDF and PPTX render as one `.doc-page` per page/slide already, so each is a natural
+// caption/slide unit. DOCX and TXT/MD render as a single continuous `.doc-page`
+// (Word/Markdown don't have fixed pagination), so — to keep captions moving and slide
+// mode showing sensible screen-sized chunks instead of the whole document squeezed into
+// one frame — this module further divides those into segments using the same
+// paragraph-level `doc.textBlocks` the rest of the app already tracks for voice/AI sync.
 
 const ASPECTS = {
   square: { w: 1080, h: 1080, label: "Square 1:1 (LinkedIn feed)" },
@@ -26,12 +33,12 @@ const ANIMATIONS = {
 
 export { ASPECTS, THEMES, ANIMATIONS };
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
+}
+
+function cleanText(text) {
+  return (text || "").replace(/\s+/g, " ").trim();
 }
 
 function wrapLines(ctx, text, maxWidth) {
@@ -71,7 +78,7 @@ async function paintTitleCard(ctx, W, H, title, theme, holdMs) {
   ctx.font = `500 ${Math.round(W * 0.022)}px -apple-system, sans-serif`;
   ctx.fillText("PDF Scroll Reader", W / 2, startY + lines.length * lineHeight + W * 0.05);
 
-  await sleep(holdMs);
+  await new Promise((r) => setTimeout(r, holdMs));
 }
 
 async function rasterizeElement(el, targetWidth) {
@@ -81,20 +88,7 @@ async function rasterizeElement(el, targetWidth) {
   return window.html2canvas(el, { backgroundColor: "#ffffff", scale, useCORS: true });
 }
 
-function captionFor(doc, el) {
-  const blocksInside = doc.textBlocks.filter((b) => el.contains(b.el));
-  return (blocksInside.map((b) => b.text).join(" ") || el.textContent || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 240);
-}
-
-// Rough narration-pace estimate for how long to hold each slide before advancing.
-function dwellMsFor(text) {
-  return clamp((text.length / 18) * 1000, 2500, 8000);
-}
-
-async function buildPages(pagesContainer, doc, targetWidth, onStatus) {
+async function buildPages(pagesContainer, targetWidth, onStatus) {
   const pageEls = Array.from(pagesContainer.querySelectorAll(":scope > .doc-page"));
   const rendered = [];
   for (let i = 0; i < pageEls.length; i++) {
@@ -102,7 +96,7 @@ async function buildPages(pagesContainer, doc, targetWidth, onStatus) {
     const el = pageEls[i];
     const srcCanvas = await rasterizeElement(el, targetWidth);
     const height = Math.round(srcCanvas.height * (targetWidth / srcCanvas.width));
-    rendered.push({ srcCanvas, height, caption: captionFor(doc, el) });
+    rendered.push({ srcCanvas, height, el });
   }
   return rendered;
 }
@@ -117,13 +111,81 @@ function buildFilmstrip(rendered, targetWidth) {
   ctx.fillRect(0, 0, targetWidth, totalHeight);
 
   let y = 0;
-  const segments = [];
   for (const r of rendered) {
     ctx.drawImage(r.srcCanvas, 0, y, targetWidth, r.height);
-    segments.push({ startY: y, endY: y + r.height, text: r.caption });
     y += r.height;
   }
-  return { filmstrip, segments, totalHeight };
+  return { filmstrip, totalHeight };
+}
+
+// One entry per *natural content unit*: a whole page for PDF/PPTX (each is already its
+// own `.doc-page` with one matching textBlock), or one per paragraph for DOCX/TXT/MD
+// (many textBlocks inside a single `.doc-page`) — so captions and slide breaks land in
+// sensible places for every format instead of only working correctly for PDF.
+function computeAtomicSegments(rendered, doc) {
+  const segments = [];
+  let cumY = 0;
+  for (let pageIndex = 0; pageIndex < rendered.length; pageIndex++) {
+    const { el, height: pageHeight } = rendered[pageIndex];
+    const elRect = el.getBoundingClientRect();
+    const blocksInside = doc.textBlocks.filter((b) => el.contains(b.el));
+    const units = blocksInside.length
+      ? blocksInside.map((b) => {
+          const r = b.el.getBoundingClientRect();
+          return { text: b.text, top: r.top - elRect.top, height: r.height || 1 };
+        })
+      : [{ text: el.textContent || "", top: 0, height: elRect.height || 1 }];
+    units.sort((a, b) => a.top - b.top);
+
+    for (const u of units) {
+      const fracTop = elRect.height > 0 ? u.top / elRect.height : 0;
+      const fracHeight = elRect.height > 0 ? u.height / elRect.height : 1;
+      const pageLocalStartY = fracTop * pageHeight;
+      const pageLocalEndY = pageLocalStartY + fracHeight * pageHeight;
+      segments.push({
+        startY: cumY + pageLocalStartY,
+        endY: cumY + pageLocalEndY,
+        pageLocalStartY,
+        pageLocalEndY,
+        pageIndex,
+        text: cleanText(u.text).slice(0, 240),
+      });
+    }
+    cumY += pageHeight;
+  }
+  return segments;
+}
+
+// Groups atomic segments into screen-sized chunks (capped at one page each, so a group
+// never straddles two different rasterized page canvases) for slide-by-slide mode.
+function groupIntoSlides(segments, targetChunkHeight) {
+  const groups = [];
+  let current = null;
+  for (const seg of segments) {
+    const currentHeight = current ? current.pageLocalEndY - current.pageLocalStartY : 0;
+    if (!current || current.pageIndex !== seg.pageIndex || currentHeight >= targetChunkHeight * 0.9) {
+      if (current) groups.push(current);
+      current = { pageIndex: seg.pageIndex, pageLocalStartY: seg.pageLocalStartY, pageLocalEndY: seg.pageLocalEndY, texts: [seg.text] };
+    } else {
+      current.pageLocalEndY = seg.pageLocalEndY;
+      current.texts.push(seg.text);
+    }
+  }
+  if (current) groups.push(current);
+  return groups.map((g) => ({ ...g, text: cleanText(g.texts.join(" ")).slice(0, 240) }));
+}
+
+function nativeCropForGroup(rendered, group) {
+  const page = rendered[group.pageIndex];
+  const nativeScale = page.srcCanvas.height / page.height;
+  const srcY = group.pageLocalStartY * nativeScale;
+  const srcH = Math.max(1, (group.pageLocalEndY - group.pageLocalStartY) * nativeScale);
+  return { srcCanvas: page.srcCanvas, srcY, srcH };
+}
+
+// Rough narration-pace estimate for how long to hold each slide before advancing.
+function dwellMsFor(text) {
+  return clamp((text.length / 18) * 1000, 2500, 8000);
 }
 
 function drawCaption(ctx, W, H, theme, text) {
@@ -180,48 +242,51 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
   }
 }
 
-function drawContainFrame(ctx, W, H, srcCanvas, srcHeight, theme, alpha = 1) {
-  const scale = Math.min(W / srcCanvas.width, H / srcHeight);
-  const dw = srcCanvas.width * scale;
-  const dh = srcHeight * scale;
+function drawContainFrame(ctx, W, H, srcCanvas, srcY, srcH, theme, alpha = 1) {
+  const srcW = srcCanvas.width;
+  const scale = Math.min(W / srcW, H / srcH);
+  const dw = srcW * scale;
+  const dh = srcH * scale;
   const dx = (W - dw) / 2;
   const dy = (H - dh) / 2;
   ctx.save();
   ctx.globalAlpha = alpha;
-  ctx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcHeight, dx, dy, dw, dh);
+  ctx.drawImage(srcCanvas, 0, srcY, srcW, srcH, dx, dy, dw, dh);
   ctx.restore();
 }
 
-async function animateSlides({ ctx, rendered, W, H, theme, wantCaptions, onStatus, isCancelled }) {
+async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions, onStatus, isCancelled }) {
   const TRANSITION_MS = 450;
 
-  for (let i = 0; i < rendered.length; i++) {
+  for (let i = 0; i < groups.length; i++) {
     if (isCancelled()) return;
-    const entry = rendered[i];
-    onStatus?.(`Recording… slide ${i + 1}/${rendered.length}`);
+    const group = groups[i];
+    const crop = nativeCropForGroup(rendered, group);
+    onStatus?.(`Recording… slide ${i + 1}/${groups.length}`);
 
-    const dwell = dwellMsFor(entry.caption);
+    const dwell = dwellMsFor(group.text);
     const holdStart = performance.now();
     while (performance.now() - holdStart < dwell) {
       if (isCancelled()) return;
       ctx.fillStyle = theme.slideBg;
       ctx.fillRect(0, 0, W, H);
-      drawContainFrame(ctx, W, H, entry.srcCanvas, entry.height, theme);
-      if (wantCaptions) drawCaption(ctx, W, H, theme, entry.caption);
+      drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme);
+      if (wantCaptions) drawCaption(ctx, W, H, theme, group.text);
       await new Promise((r) => requestAnimationFrame(r));
     }
 
-    const next = rendered[i + 1];
-    if (!next) continue;
+    const nextGroup = groups[i + 1];
+    if (!nextGroup) continue;
+    const nextCrop = nativeCropForGroup(rendered, nextGroup);
     const transStart = performance.now();
     while (true) {
       if (isCancelled()) return;
       const t = Math.min(1, (performance.now() - transStart) / TRANSITION_MS);
       ctx.fillStyle = theme.slideBg;
       ctx.fillRect(0, 0, W, H);
-      drawContainFrame(ctx, W, H, entry.srcCanvas, entry.height, theme, 1 - t);
-      drawContainFrame(ctx, W, H, next.srcCanvas, next.height, theme, t);
-      if (wantCaptions) drawCaption(ctx, W, H, theme, t < 0.5 ? entry.caption : next.caption);
+      drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme, 1 - t);
+      drawContainFrame(ctx, W, H, nextCrop.srcCanvas, nextCrop.srcY, nextCrop.srcH, theme, t);
+      if (wantCaptions) drawCaption(ctx, W, H, theme, t < 0.5 ? group.text : nextGroup.text);
       if (t >= 1) break;
       await new Promise((r) => requestAnimationFrame(r));
     }
@@ -254,10 +319,15 @@ export async function exportVideo({
   const ctx = previewCanvas.getContext("2d", { willReadFrequently: true });
 
   onStatus?.("Preparing pages…");
-  const rendered = await buildPages(pagesContainer, doc, W, onStatus);
-  const { filmstrip, segments, totalHeight } = animation === "slides"
-    ? { filmstrip: null, segments: null, totalHeight: 0 }
-    : buildFilmstrip(rendered, W);
+  const rendered = await buildPages(pagesContainer, W, onStatus);
+  const atomicSegments = computeAtomicSegments(rendered, doc);
+
+  let filmstrip = null, totalHeight = 0, slideGroups = null;
+  if (animation === "slides") {
+    slideGroups = groupIntoSlides(atomicSegments, H);
+  } else {
+    ({ filmstrip, totalHeight } = buildFilmstrip(rendered, W));
+  }
 
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const destination = audioCtx.createMediaStreamDestination();
@@ -301,12 +371,12 @@ export async function exportVideo({
     if (!cancelToken.cancelled) {
       if (animation === "slides") {
         await animateSlides({
-          ctx, rendered, W, H, theme, wantCaptions, onStatus,
+          ctx, rendered, groups: slideGroups, W, H, theme, wantCaptions, onStatus,
           isCancelled: () => cancelToken.cancelled,
         });
       } else {
         await animateScroll({
-          ctx, filmstrip, segments, W, H, totalHeight, speed, style: animation, theme, wantCaptions, onStatus,
+          ctx, filmstrip, segments: atomicSegments, W, H, totalHeight, speed, style: animation, theme, wantCaptions, onStatus,
           isCancelled: () => cancelToken.cancelled,
         });
       }
