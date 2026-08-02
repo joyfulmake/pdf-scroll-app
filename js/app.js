@@ -2,6 +2,7 @@ import { loadPdf } from "./loaders/pdfLoader.js";
 import { loadDocx } from "./loaders/docxLoader.js";
 import { loadPptx } from "./loaders/pptxLoader.js";
 import { loadText } from "./loaders/textLoader.js";
+import { loadHtml } from "./loaders/htmlLoader.js";
 import { ScrollPlayer } from "./scrollPlayer.js";
 import { VoiceReader } from "./voiceReader.js";
 import { NotesPanel } from "./notes.js";
@@ -132,8 +133,10 @@ async function loadFile(file) {
       doc = await loadText(await file.text(), true, pagesContainer, nameNoExt);
     } else if (ext === "txt") {
       doc = await loadText(await file.text(), false, pagesContainer, nameNoExt);
+    } else if (ext === "html" || ext === "htm") {
+      doc = await loadHtml(await file.text(), pagesContainer, nameNoExt);
     } else {
-      showToast("Unsupported file type — use PDF, DOCX, PPTX, TXT, or MD.");
+      showToast("Unsupported file type — use PDF, DOCX, PPTX, TXT, MD, or HTML.");
       return;
     }
     onDocLoaded(doc, nameNoExt);

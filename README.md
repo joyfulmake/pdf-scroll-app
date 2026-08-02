@@ -17,7 +17,7 @@ Then open `http://localhost:8934/`.
 
 ## Features
 
-- **Open PDF, DOCX, PPTX, TXT, or MD** — drag-and-drop or the "Open document" button.
+- **Open PDF, DOCX, PPTX, TXT, MD, or HTML** — drag-and-drop or the "Open document" button.
 - **Scrolling video mode** — Play/Pause auto-scrolls the document at an adjustable speed, with a seekable progress bar. Fully offline.
 - **Read aloud** — uses the browser's built-in text-to-speech (Web Speech API), highlighting and auto-scrolling to the section currently being read. Choose the voice, rate, and pitch in Settings. Fully offline, free.
 - **Highlight → Ask AI** — select any text to get a floating toolbar: ask Claude to explain the passage, add it straight to your notes, or have it read back to you.
@@ -62,6 +62,7 @@ test/smoke.mjs         Playwright smoke test (dev-only, not needed to use the ap
 - **DOCX** — converted via mammoth.js into a continuous flowing article (no fixed "pages", since Word doesn't store pagination either).
 - **PPTX** — a lightweight from-scratch reader (JSZip + XML parsing): extracts each slide's title, bullet text, and images into a clean "slide card". It is **not** a pixel-perfect PowerPoint renderer — fonts, exact positions, and animations aren't reproduced, but the content is fully readable, narratable, and summarizable.
 - **TXT/MD** — Markdown is rendered via marked.js; plain text is split into paragraphs.
+- **HTML** — parsed with DOMParser; `<script>`, `<style>`, event-handler attributes (`onclick` etc.), and `javascript:` URLs are stripped before rendering, since an uploaded HTML file is untrusted content even though it's local.
 
 ## Video export notes
 

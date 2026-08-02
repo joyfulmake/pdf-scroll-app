@@ -193,6 +193,30 @@ await step("PPTX loads via JSZip with slide cards", async () => {
   if (!firstTitle.includes("Welcome to the Sample Deck")) throw new Error(`unexpected slide title: ${firstTitle}`);
 });
 
+await step("HTML loads with content rendered and scripts/handlers stripped", async () => {
+  await page.evaluate(() => { delete window.__pwned; delete window.__pwned2; delete window.__pwned3; });
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample.html");
+  await page.waitForSelector(".doc-flow-page", { timeout: 20000 });
+
+  const blocks = await page.$$eval(".text-block", (els) => els.length);
+  if (blocks < 3) throw new Error(`expected >=3 blocks, got ${blocks}`);
+
+  const containerText = await page.$eval(".doc-flow-page", (el) => el.textContent);
+  if (!containerText.includes("HTML Fixture Title")) throw new Error(`unexpected content: ${containerText.slice(0, 120)}`);
+
+  const scriptRan = await page.evaluate(() => window.__pwned === true);
+  if (scriptRan) throw new Error("embedded <script> executed — sanitization failed");
+
+  const hasOnclick = await page.$eval(".doc-flow-page", (el) => !!el.querySelector("[onclick]"));
+  if (hasOnclick) throw new Error("onclick attribute was not stripped");
+
+  const hasJsHref = await page.$eval(".doc-flow-page", (el) =>
+    Array.from(el.querySelectorAll("a")).some((a) => (a.getAttribute("href") || "").startsWith("javascript:"))
+  );
+  if (hasJsHref) throw new Error("javascript: href was not stripped");
+});
+
 await step("DOCX/TXT get split into multiple slides in slide mode (not squeezed into one)", async () => {
   const fileInput = await page.$("#file-input");
   await fileInput.setInputFiles("/tmp/sample-long.txt");
