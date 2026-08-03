@@ -329,6 +329,45 @@ await step("HTML loads with content rendered and scripts/handlers stripped", asy
     Array.from(el.querySelectorAll("a")).some((a) => (a.getAttribute("href") || "").startsWith("javascript:"))
   );
   if (hasJsHref) throw new Error("javascript: href was not stripped");
+
+  // The bug this app actually shipped: stripping <style> outright discarded the CSS
+  // class that gave this box its dark background, leaving its white text invisible
+  // against the app's own white "paper" background.
+  const { bg, color } = await page.$eval("#dark-box-text", (el) => {
+    const s = getComputedStyle(el);
+    return { bg: s.backgroundColor, color: s.color };
+  });
+  const luminance = (rgb) => {
+    const [r, g, b] = rgb.match(/\d+/g).map(Number);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  // Own background (dark) must win over the ancestor's white paper background —
+  // otherwise white text sits directly on white and vanishes.
+  if (luminance(bg) > 60) throw new Error(`expected the dark-box's own dark background to apply, got ${bg}`);
+  if (luminance(color) < 200) throw new Error(`expected white text to stay white, got ${color}`);
+});
+
+await step("Markdown's embedded raw HTML is sanitized the same way as .html uploads", async () => {
+  await page.evaluate(() => { delete window.__mdPwned; delete window.__mdPwned2; });
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample-styled.md");
+  await page.waitForSelector(".doc-flow-page", { timeout: 20000 });
+
+  const scriptRan = await page.evaluate(() => window.__mdPwned === true);
+  if (scriptRan) throw new Error("embedded <script> in markdown executed — sanitization failed");
+  const hasOnclick = await page.$eval(".doc-flow-page", (el) => !!el.querySelector("[onclick]"));
+  if (hasOnclick) throw new Error("onclick attribute in markdown HTML was not stripped");
+
+  const { bg, color } = await page.$eval("#md-dark-box-text", (el) => {
+    const s = getComputedStyle(el);
+    return { bg: s.backgroundColor, color: s.color };
+  });
+  const luminance = (rgb) => {
+    const [r, g, b] = rgb.match(/\d+/g).map(Number);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  if (luminance(bg) > 60) throw new Error(`expected dark box background from embedded <style>, got ${bg}`);
+  if (luminance(color) < 200) throw new Error(`expected white text to stay white, got ${color}`);
 });
 
 await step("DOCX/TXT get split into multiple slides in slide mode (not squeezed into one)", async () => {

@@ -1,35 +1,23 @@
-// Renders an uploaded .html/.htm file. This is untrusted content (even though it's a
-// local file the user picked themselves), so scripts, styles, and event-handler
-// attributes are stripped via DOMParser before anything is inserted into the page —
-// no arbitrary script execution, no fighting with the app's own CSS.
-
-const DISALLOWED_TAGS = new Set(["SCRIPT", "STYLE", "LINK", "META", "IFRAME", "OBJECT", "EMBED", "NOSCRIPT", "TITLE", "HEAD"]);
-
-function sanitize(node) {
-  Array.from(node.children).forEach((child) => {
-    if (DISALLOWED_TAGS.has(child.tagName)) {
-      child.remove();
-      return;
-    }
-    Array.from(child.attributes).forEach((attr) => {
-      const name = attr.name.toLowerCase();
-      if (name.startsWith("on")) {
-        child.removeAttribute(attr.name);
-      } else if ((name === "href" || name === "src") && /^\s*javascript:/i.test(attr.value)) {
-        child.removeAttribute(attr.name);
-      }
-    });
-    sanitize(child);
-  });
-}
+import { sanitizeHtmlDocument } from "./sanitizeHtml.js";
 
 export async function loadHtml(rawHtml, container, filenameNoExt) {
-  const parsed = new DOMParser().parseFromString(rawHtml, "text/html");
-  sanitize(parsed.body);
-
   const page = document.createElement("article");
   page.className = "doc-page doc-flow-page";
-  page.innerHTML = parsed.body.innerHTML;
+  // Gives the original document's own CSS a scoping root to attach to (see
+  // sanitizeHtmlDocument / @scope) — a unique id so multiple loaded files never clash.
+  page.id = `html-doc-${Math.random().toString(36).slice(2, 9)}`;
+
+  const { bodyHtml, scopedCss, title } = sanitizeHtmlDocument(rawHtml, `#${page.id}`);
+
+  if (scopedCss) {
+    const styleEl = document.createElement("style");
+    styleEl.textContent = scopedCss;
+    page.appendChild(styleEl);
+  }
+
+  const content = document.createElement("div");
+  content.innerHTML = bodyHtml;
+  page.appendChild(content);
   container.appendChild(page);
 
   const textBlocks = [];
@@ -44,19 +32,19 @@ export async function loadHtml(rawHtml, container, filenameNoExt) {
   if (!textBlocks.length) {
     // No recognizable block elements (e.g. a page built entirely from <div>s) — fall
     // back to treating the whole body's text as one block so it's still readable.
-    const t = (parsed.body.textContent || "").replace(/\s+/g, " ").trim();
+    const t = content.textContent.replace(/\s+/g, " ").trim();
     if (t) {
       const p = document.createElement("p");
       p.textContent = t;
       p.classList.add("text-block");
-      page.appendChild(p);
+      content.appendChild(p);
       textBlocks.push({ el: p, text: t, label: null });
     }
   }
 
   const heading = page.querySelector("h1, h2");
   return {
-    title: (heading?.textContent || parsed.title || filenameNoExt).trim(),
+    title: (heading?.textContent || title || filenameNoExt).trim(),
     kind: "html",
     textBlocks,
   };

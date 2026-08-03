@@ -58,11 +58,12 @@ test/smoke.mjs         Playwright smoke test (dev-only, not needed to use the ap
 
 ## Format support notes
 
-- **PDF** — full-fidelity rendering via pdf.js, with selectable text.
-- **DOCX** — converted via mammoth.js into a continuous flowing article (no fixed "pages", since Word doesn't store pagination either).
-- **PPTX** — a lightweight from-scratch reader (JSZip + XML parsing): extracts each slide's title, bullet text, and images into a clean "slide card". It is **not** a pixel-perfect PowerPoint renderer — fonts, exact positions, and animations aren't reproduced, but the content is fully readable, narratable, and summarizable.
-- **TXT/MD** — Markdown is rendered via marked.js; plain text is split into paragraphs.
-- **HTML** — parsed with DOMParser; `<script>`, `<style>`, event-handler attributes (`onclick` etc.), and `javascript:` URLs are stripped before rendering, since an uploaded HTML file is untrusted content even though it's local.
+- **PDF** — full-fidelity rendering via pdf.js: pages are drawn to canvas exactly as designed, so this is the one format immune by construction to any color/contrast issue below — nothing is restyled.
+- **DOCX** — converted via mammoth.js into a continuous flowing article (no fixed "pages", since Word doesn't store pagination either). Mammoth's default conversion is semantic-only — it discards direct/manual formatting like font color and highlight fills, keeping structure (headings, lists, bold/italic) but not visual styling — so unlike HTML, there's no risk of e.g. white-on-white text from a document that used manual color formatting. Verified with a fixture containing an explicit white-on-black run.
+- **PPTX** — a lightweight from-scratch reader (JSZip + XML parsing): extracts each slide's title, bullet text, and images into a clean "slide card". It only ever reads text content, never color/formatting — so it can't reproduce a slide's original color scheme, but it also can't render invisible text. It is **not** a pixel-perfect PowerPoint renderer — fonts, exact positions, and animations aren't reproduced, but the content is fully readable, narratable, and summarizable.
+- **TXT** — split into paragraphs, no styling of any kind in the source to preserve or lose.
+- **MD** — rendered via marked.js. Since marked passes any raw HTML embedded in the source straight through by default, it goes through the same sanitizer as `.html` uploads (see below) — both for security and for color-pairing correctness.
+- **HTML** — parsed with DOMParser. `<script>`, event-handler attributes (`onclick` etc.), and `javascript:` URLs are stripped, since an uploaded HTML file is untrusted content even though it's local. Unlike a naive sanitizer, `<style>` tags are **not** discarded — most real HTML documents define their look (background/text color pairings especially) via CSS classes, and dropping the stylesheet while keeping the markup silently breaks that pairing (e.g. white text that depended on a dark box background goes invisible once the class defining that background is gone). Instead, styles are extracted and re-injected scoped via the CSS `@scope` at-rule to just that document's container, so the original page's own look is preserved without any risk of it leaking out and affecting the app's own UI.
 
 ## Video export notes
 
