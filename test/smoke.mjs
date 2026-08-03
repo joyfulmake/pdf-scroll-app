@@ -161,6 +161,38 @@ await step("Only one side-panel tab is visible at a time (not stacked)", async (
   if (!settingsVisible) throw new Error("expected #panel-settings to be visible");
 });
 
+await step("Sidebar can be resized by dragging its handle, and the width persists", async () => {
+  const before = await page.$eval("#side-panel", (el) => el.getBoundingClientRect().width);
+  const handleBox = await page.$eval("#side-panel-resizer", (el) => {
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+
+  await page.mouse.move(handleBox.x, handleBox.y);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x - 120, handleBox.y, { steps: 8 }); // drag left = wider
+  await page.mouse.up();
+
+  const after = await page.$eval("#side-panel", (el) => el.getBoundingClientRect().width);
+  if (after < before + 80) throw new Error(`expected sidebar to widen by ~120px, went from ${before} to ${after}`);
+
+  const stored = await page.evaluate(() => localStorage.getItem("pdfScrollApp.sidebarWidth"));
+  if (!stored || Math.abs(parseInt(stored, 10) - after) > 2) {
+    throw new Error(`expected persisted width to match rendered width, got stored=${stored} rendered=${after}`);
+  }
+
+  await page.reload();
+  await page.waitForTimeout(300);
+  await page.click("#tab-settings-btn", { timeout: 4000 });
+  const afterReload = await page.$eval("#side-panel", (el) => el.getBoundingClientRect().width);
+  if (Math.abs(afterReload - after) > 2) throw new Error(`expected width to persist across reload, got ${afterReload} vs ${after}`);
+
+  // Reload wiped the loaded document (same as the theme-reload test) — restore it.
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles(SAMPLE_TXT);
+  await page.waitForSelector(".doc-flow-page", { timeout: 20000 });
+});
+
 await step("Theme swatch applies data-theme and persists to localStorage", async () => {
   await page.click('.theme-swatch[data-theme="sage"]', { timeout: 4000 });
   const attr = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));

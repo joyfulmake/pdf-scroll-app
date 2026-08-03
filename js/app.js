@@ -7,6 +7,7 @@ import { ScrollPlayer } from "./scrollPlayer.js";
 import { VoiceReader } from "./voiceReader.js";
 import { NotesPanel } from "./notes.js";
 import { ThemeSwitcher } from "./theme.js";
+import { SidebarResizer } from "./sidebarResize.js";
 import { explainSelection, summarizeText } from "./aiClient.js";
 import { exportVideo } from "./videoExport.js";
 import { showToast } from "./utils.js";
@@ -40,6 +41,7 @@ const notes = new NotesPanel({
 });
 
 new ThemeSwitcher({ grid: $("theme-grid") });
+new SidebarResizer({ panel: $("side-panel"), handle: $("side-panel-resizer") });
 
 // ---------- Scroll player / voice reader ----------
 
