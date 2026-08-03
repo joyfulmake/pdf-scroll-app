@@ -161,6 +161,55 @@ await step("Only one side-panel tab is visible at a time (not stacked)", async (
   if (!settingsVisible) throw new Error("expected #panel-settings to be visible");
 });
 
+await step("Theme swatch applies data-theme and persists to localStorage", async () => {
+  await page.click('.theme-swatch[data-theme="sage"]', { timeout: 4000 });
+  const attr = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+  if (attr !== "sage") throw new Error(`expected data-theme=sage, got ${attr}`);
+  const stored = await page.evaluate(() => localStorage.getItem("pdfScrollApp.theme"));
+  if (stored !== "sage") throw new Error(`expected localStorage sage, got ${stored}`);
+  const activeCount = await page.$$eval(".theme-swatch.active", (els) => els.length);
+  if (activeCount !== 1) throw new Error(`expected exactly 1 active swatch, got ${activeCount}`);
+  const activeTheme = await page.$eval(".theme-swatch.active", (el) => el.dataset.theme);
+  if (activeTheme !== "sage") throw new Error(`expected active swatch to be sage, got ${activeTheme}`);
+});
+
+await step("Chosen theme survives a reload with no flash (FOUC-prevention script)", async () => {
+  await page.reload();
+  const attr = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+  if (attr !== "sage") throw new Error(`expected theme to persist as sage after reload, got ${attr}`);
+  // Reset to auto so it doesn't leak into later tests/screenshots, and reload the
+  // document since page.reload() wiped it for the tests that follow.
+  await page.click("#tab-settings-btn", { timeout: 4000 });
+  await page.click('.theme-swatch[data-theme="auto"]', { timeout: 4000 });
+  await page.click("#tab-settings-btn", { timeout: 4000 }); // close panel
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles(SAMPLE_TXT);
+  await page.waitForSelector(".doc-flow-page", { timeout: 20000 });
+});
+
+await step("Document content stays readable (dark text on light paper) in every theme", async () => {
+  for (const theme of ["dark", "lavender", "sage", "sky", "sand", "blush"]) {
+    await page.click("#tab-settings-btn", { timeout: 4000 });
+    await page.click(`.theme-swatch[data-theme="${theme}"]`, { timeout: 4000 });
+    await page.click("#tab-settings-btn", { timeout: 4000 }); // close panel
+    const { bg, color } = await page.$eval(".doc-flow-page", (el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, color: s.color };
+    });
+    // Cheap luminance-order check rather than a full contrast ratio: background must
+    // be light and text must be dark, regardless of which app theme is active.
+    const luminance = (rgb) => {
+      const [r, g, b] = rgb.match(/\d+/g).map(Number);
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    if (luminance(bg) < 200) throw new Error(`[${theme}] expected light paper background, got ${bg}`);
+    if (luminance(color) > 100) throw new Error(`[${theme}] expected dark text, got ${color}`);
+  }
+  await page.click("#tab-settings-btn", { timeout: 4000 });
+  await page.click('.theme-swatch[data-theme="auto"]', { timeout: 4000 });
+  await page.click("#tab-settings-btn", { timeout: 4000 });
+});
+
 await step("Selecting text shows the selection toolbar", async () => {
   await page.click("#tab-settings-btn", { timeout: 4000 }); // close panel
   const block = await page.$(".text-block");

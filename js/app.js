@@ -6,6 +6,7 @@ import { loadHtml } from "./loaders/htmlLoader.js";
 import { ScrollPlayer } from "./scrollPlayer.js";
 import { VoiceReader } from "./voiceReader.js";
 import { NotesPanel } from "./notes.js";
+import { ThemeSwitcher } from "./theme.js";
 import { explainSelection, summarizeText } from "./aiClient.js";
 import { exportVideo } from "./videoExport.js";
 import { showToast } from "./utils.js";
@@ -30,13 +31,15 @@ const readSelectionBtn = $("read-selection-btn");
 let currentDoc = null;
 let pendingSelectionText = "";
 
-// ---------- Notes ----------
+// ---------- Notes / Theme ----------
 
 const notes = new NotesPanel({
   textarea: $("notes-text"),
   downloadBtn: $("notes-download-btn"),
   clearBtn: $("notes-clear-btn"),
 });
+
+new ThemeSwitcher({ grid: $("theme-grid") });
 
 // ---------- Scroll player / voice reader ----------
 

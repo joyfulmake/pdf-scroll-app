@@ -1,14 +1,17 @@
+/* Default palette ("Lavender") — soft, gentle, light. Explicit [data-theme] below
+   overrides this regardless of system preference; without one, dark mode still
+   follows the OS via prefers-color-scheme. */
 :root {
-  --bg: #f6f3ec;
+  --bg: #faf8ff;
   --panel-bg: #ffffff;
-  --text: #22201c;
-  --muted: #6f6a60;
-  --border: #e6e0d3;
-  --accent: #5b46e8;
-  --accent-2: #8f5cf0;
-  --accent-contrast: #ffffff;
-  --danger: #d64545;
-  --page-shadow: 0 2px 10px rgba(40, 30, 10, 0.10);
+  --text: #2b2740;
+  --muted: #7c7593;
+  --border: #e8e2f5;
+  --accent: #9b87f0;
+  --accent-2: #d9a8f0;
+  --accent-contrast: #2a2438;
+  --danger: #c94f4f;
+  --page-shadow: 0 2px 10px rgba(60, 40, 100, 0.08);
   --radius: 12px;
   color-scheme: light dark;
 }
@@ -25,6 +28,41 @@
     --accent-contrast: #14131a;
     --page-shadow: 0 2px 14px rgba(0, 0, 0, 0.5);
   }
+}
+
+/* ---------- Explicit theme choices (Settings → Appearance) ---------- */
+/* Each wins over prefers-color-scheme once the user picks something other than
+   "Auto", since an attribute selector on :root outranks a bare :root inside @media. */
+
+:root[data-theme="lavender"] {
+  --bg: #faf8ff; --panel-bg: #ffffff; --text: #2b2740; --muted: #7c7593;
+  --border: #e8e2f5; --accent: #9b87f0; --accent-2: #d9a8f0; --accent-contrast: #2a2438;
+  --page-shadow: 0 2px 10px rgba(60, 40, 100, 0.08);
+}
+:root[data-theme="sage"] {
+  --bg: #f6faf4; --panel-bg: #ffffff; --text: #26302a; --muted: #6f8074;
+  --border: #dfeadb; --accent: #7fb383; --accent-2: #b7dab0; --accent-contrast: #1f2b22;
+  --page-shadow: 0 2px 10px rgba(40, 80, 50, 0.08);
+}
+:root[data-theme="sky"] {
+  --bg: #f4f9fc; --panel-bg: #ffffff; --text: #202b33; --muted: #64798a;
+  --border: #dde9f0; --accent: #6fa8d6; --accent-2: #a9d3e8; --accent-contrast: #1a2530;
+  --page-shadow: 0 2px 10px rgba(30, 70, 100, 0.08);
+}
+:root[data-theme="sand"] {
+  --bg: #fbf6ee; --panel-bg: #ffffff; --text: #2e2820; --muted: #7d7264;
+  --border: #ede1cd; --accent: #d3a463; --accent-2: #edcd99; --accent-contrast: #2e2410;
+  --page-shadow: 0 2px 10px rgba(100, 70, 20, 0.08);
+}
+:root[data-theme="blush"] {
+  --bg: #fdf5f6; --panel-bg: #ffffff; --text: #33262a; --muted: #8a6d72;
+  --border: #f2dde0; --accent: #e192a2; --accent-2: #f4c0c9; --accent-contrast: #331e23;
+  --page-shadow: 0 2px 10px rgba(120, 40, 60, 0.08);
+}
+:root[data-theme="dark"] {
+  --bg: #16151c; --panel-bg: #201f28; --text: #ece9f2; --muted: #a29cb0;
+  --border: #34313e; --accent: #8a72ff; --accent-2: #c084fc; --accent-contrast: #14131a;
+  --page-shadow: 0 2px 14px rgba(0, 0, 0, 0.5);
 }
 
 * { box-sizing: border-box; }
@@ -264,8 +302,10 @@ select:focus, input:focus, textarea:focus {
 .pdf-page canvas { display: block; }
 
 .doc-flow-page {
+  /* Document content always reads as paper — white background, dark text — same as
+     PDF pages and slide cards, regardless of the app's own light/dark/pastel theme. */
   width: min(92%, 760px);
-  background: var(--panel-bg);
+  background: #fff;
   box-shadow: var(--page-shadow);
   border-radius: var(--radius);
   padding: 40px 48px;
@@ -433,6 +473,45 @@ legend {
   flex-direction: row;
   align-items: center;
   gap: 8px;
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+}
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 6px 8px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-bg);
+  color: var(--muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.05s;
+}
+.theme-swatch:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.theme-swatch:active { transform: scale(0.97); }
+.theme-swatch.active {
+  border-color: var(--accent);
+  color: var(--text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.swatch-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+.swatch-auto {
+  background: linear-gradient(135deg, #faf8ff 50%, #201f28 50%);
+}
+.swatch-dark {
+  background: linear-gradient(135deg, #34313e, #8a72ff);
 }
 
 /* ---------- Toast ---------- */
