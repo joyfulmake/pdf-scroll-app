@@ -1,5 +1,7 @@
 # PDF Scroll Reader
 
+![Demo: loading a document, auto-scrolling, voice read-aloud with highlighting, highlight-to-AI, theme switching, and the video export dialog](assets/demo.gif)
+
 A browser-based app that turns a document — PDF, Word (.docx), PowerPoint (.pptx), plain text/Markdown, or HTML — into a smooth scrolling "video-like" reading experience: auto-scroll playback, a real voice reading it back to you, highlight-to-AI explanations, AI summaries, freeform notes, a soft/gentle theme picker, and an export to an actual narrated video file for LinkedIn or any other platform.
 
 **Live**: [pdf-scroll-app.pages.dev](https://pdf-scroll-app.pages.dev) · [pdf-scroll-app.sriram-c76-254.workers.dev](https://pdf-scroll-app.sriram-c76-254.workers.dev) (see [ARCHITECTURE.md](ARCHITECTURE.md) for why there are two)
@@ -110,4 +112,14 @@ npm install       # installs playwright-core only
 npm run serve     # in one terminal
 npm test          # in another — AI-dependent checks skip gracefully against the
                   # local static server and only run meaningfully against a deployed URL
+```
+
+## Regenerating the demo GIF / OG image
+
+`scripts/capture-demo.mjs` drives a live deployment through the app's core features (Playwright + system Chromium) and saves numbered screenshots; `scripts/make-gif.py` (Pillow) assembles them into `assets/demo.gif`.
+
+```sh
+npm install --no-save playwright-core
+node scripts/capture-demo.mjs      # defaults to https://pdf-scroll-app.pages.dev
+python3 scripts/make-gif.py
 ```

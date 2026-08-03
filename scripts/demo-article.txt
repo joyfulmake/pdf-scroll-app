@@ -1,0 +1,9 @@
+The Future of Reading
+
+Books have always adapted to the technology of their time, from scrolls to codices to screens. Today, most of our reading happens on the same rectangle we use for everything else — a document dropped into a browser tab, competing for attention with a dozen other things.
+
+This app tries a different approach. Instead of a static page you have to actively scroll through, your document becomes something closer to a video: it moves on its own, at whatever pace you set, while a voice reads it aloud and highlights each line as it goes.
+
+If something catches your attention, you simply highlight it. An AI model explains the passage, right there in the sidebar, and you can save that explanation straight into your notes without ever leaving the page.
+
+When you are ready to share what you found, the whole thing can be exported as a narrated video — scrolling, captioned, and themed — ready for LinkedIn or anywhere else video lives.

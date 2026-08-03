@@ -4,6 +4,7 @@
 .claude/
 node_modules/
 test/
+scripts/
 src/
 functions/
 wrangler.jsonc
