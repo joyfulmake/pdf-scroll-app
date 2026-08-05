@@ -58,27 +58,40 @@ function wrapLines(ctx, text, maxWidth) {
   return lines;
 }
 
-async function paintTitleCard(ctx, W, H, title, theme, holdMs) {
+async function paintTitleCard(ctx, W, H, title, theme, holdMs, isCancelled) {
+  // canvas.captureStream() does not reliably emit frames from elapsed time alone —
+  // Chrome (and others) only actually capture a frame when the canvas is repainted.
+  // Drawing once and then just `await sleep(holdMs)` (the original approach here)
+  // produces a recording with zero real video data for the entire hold, because
+  // nothing ever repaints during it — confirmed empirically: an isolated draw-once-
+  // then-wait test produced a near-empty, unplayable output, while an identical test
+  // that repainted every frame in a loop produced a full, valid one. So the title
+  // card must redraw every frame during its hold, same as the scroll/slide loops
+  // already correctly do.
   const grad = ctx.createLinearGradient(0, 0, W, H);
   grad.addColorStop(0, theme.grad[0]);
   grad.addColorStop(1, theme.grad[1]);
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font = `700 ${Math.round(W * 0.065)}px -apple-system, sans-serif`;
   const lines = wrapLines(ctx, title, W * 0.8);
   const lineHeight = W * 0.085;
   const startY = H / 2 - ((lines.length - 1) * lineHeight) / 2;
-  lines.forEach((line, i) => ctx.fillText(line, W / 2, startY + i * lineHeight));
 
-  ctx.fillStyle = theme.accent;
-  ctx.font = `500 ${Math.round(W * 0.022)}px -apple-system, sans-serif`;
-  ctx.fillText("PDF Scroll Reader", W / 2, startY + lines.length * lineHeight + W * 0.05);
-
-  await new Promise((r) => setTimeout(r, holdMs));
+  const start = performance.now();
+  while (performance.now() - start < holdMs) {
+    if (isCancelled?.()) return;
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `700 ${Math.round(W * 0.065)}px -apple-system, sans-serif`;
+    lines.forEach((line, i) => ctx.fillText(line, W / 2, startY + i * lineHeight));
+    ctx.fillStyle = theme.accent;
+    ctx.font = `500 ${Math.round(W * 0.022)}px -apple-system, sans-serif`;
+    ctx.fillText("PDF Scroll Reader", W / 2, startY + lines.length * lineHeight + W * 0.05);
+    await new Promise((r) => requestAnimationFrame(r));
+  }
 }
 
 async function rasterizeElement(el, targetWidth) {
@@ -293,6 +306,50 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
   }
 }
 
+// Ordered by preference: modern webm/vp9 first, down through older webm variants,
+// down to plain mp4 last — Safari versions before 18.4 (March 2025) only ever
+// supported mp4/h264 for MediaRecorder and returned false for every webm variant, so
+// without this fallback chain those browsers would fail outright instead of still
+// producing a (less efficient, but valid and shareable) mp4 file.
+// Deliberately does NOT include an explicit "video/webm;codecs=vp8,opus" candidate:
+// confirmed by direct isolated testing that at least one real Firefox build reports
+// it as supported via isTypeSupported() and even transitions MediaRecorder.state to
+// "inactive" on stop(), but then never fires the 'stop'/'dataavailable' events at
+// all — the recording hangs forever with zero output. The bare "video/webm" entry
+// below still lets such browsers record (letting them pick their own default codec
+// instead of forcing vp8+opus explicitly) without hitting that failure mode.
+const MIME_CANDIDATES = [
+  "video/webm;codecs=vp9,opus",
+  "video/webm",
+  "video/mp4",
+];
+
+function pickSupportedMimeType() {
+  return MIME_CANDIDATES.find((m) => MediaRecorder.isTypeSupported(m)) || null;
+}
+
+// Checked up front, before requesting microphone permission or doing any rendering
+// work, so unsupported browsers get one clear message immediately instead of failing
+// partway through with a more confusing error.
+export function checkVideoExportSupport() {
+  if (typeof MediaRecorder === "undefined") {
+    return "Video export needs the MediaRecorder API, which this browser doesn't have. Try a recent Chrome, Edge, Firefox, or Safari 18.4+.";
+  }
+  if (!document.createElement("canvas").captureStream) {
+    return "Video export needs canvas.captureStream, which this browser doesn't support. Try a recent Chrome, Edge, Firefox, or Safari.";
+  }
+  if (!pickSupportedMimeType()) {
+    return "This browser's MediaRecorder doesn't support any video format this app can produce (webm or mp4). Try a recent Chrome, Edge, Firefox, or Safari 18.4+.";
+  }
+  if (!(window.AudioContext || window.webkitAudioContext)) {
+    return "Video export needs the Web Audio API, which this browser doesn't have.";
+  }
+  if (typeof AudioContext !== "undefined" && !AudioContext.prototype.createMediaStreamDestination) {
+    return "This browser's Web Audio API can't produce an audio track for recording (createMediaStreamDestination unsupported).";
+  }
+  return null; // supported
+}
+
 export async function exportVideo({
   pagesContainer,
   doc,
@@ -308,9 +365,9 @@ export async function exportVideo({
   cancelToken = { cancelled: false },
   onStatus,
 }) {
-  if (typeof MediaRecorder === "undefined" || !previewCanvas.captureStream) {
-    throw new Error("Video export isn't supported in this browser. Try a recent Chrome, Edge, or Firefox.");
-  }
+  const unsupportedReason = checkVideoExportSupport();
+  if (unsupportedReason) throw new Error(unsupportedReason);
+  const mimeType = pickSupportedMimeType();
 
   const { w: W, h: H } = ASPECTS[aspect];
   const theme = THEMES[themeKey] || THEMES.classic;
@@ -329,32 +386,51 @@ export async function exportVideo({
     ({ filmstrip, totalHeight } = buildFilmstrip(rendered, W));
   }
 
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const destination = audioCtx.createMediaStreamDestination();
+  // A MediaStreamAudioDestinationNode with nothing actually connected to it still
+  // produces a "live" audio track — but including that track in the recorded
+  // MediaStream breaks the recording entirely (not just silent audio: the whole
+  // muxed output comes back empty/unplayable). Confirmed empirically: identical
+  // video-only recordings worked correctly, and recordings with a real connected
+  // source (mic or an oscillator standing in for one) worked correctly, but adding
+  // an unconnected destination's track — exactly what happens when neither mic nor
+  // music is requested — reproduced a broken, near-empty file every time. So only
+  // create the audio graph, and only include an audio track at all, when a real
+  // source will actually feed it.
+  const wantsAnyAudio = wantMic || !!musicFile;
+  let audioCtx = null;
+  let destination = null;
   let micStream = null;
   let musicNode = null;
 
-  if (wantMic) {
-    onStatus?.("Requesting microphone…");
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioCtx.createMediaStreamSource(micStream).connect(destination);
-  }
-  if (musicFile) {
-    const buf = await musicFile.arrayBuffer();
-    const audioBuffer = await audioCtx.decodeAudioData(buf);
-    musicNode = audioCtx.createBufferSource();
-    musicNode.buffer = audioBuffer;
-    musicNode.loop = true;
-    const gain = audioCtx.createGain();
-    gain.gain.value = 0.18;
-    musicNode.connect(gain).connect(destination);
+  if (wantsAnyAudio) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // iOS Safari creates AudioContext in a "suspended" state until explicitly resumed
+    // from within a user-gesture call stack — this call is (the export is started by
+    // a click), but resuming explicitly avoids a silent, hard-to-diagnose no-audio
+    // result if that assumption ever doesn't hold.
+    if (audioCtx.state === "suspended") await audioCtx.resume();
+    destination = audioCtx.createMediaStreamDestination();
+
+    if (wantMic) {
+      onStatus?.("Requesting microphone…");
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioCtx.createMediaStreamSource(micStream).connect(destination);
+    }
+    if (musicFile) {
+      const buf = await musicFile.arrayBuffer();
+      const audioBuffer = await audioCtx.decodeAudioData(buf);
+      musicNode = audioCtx.createBufferSource();
+      musicNode.buffer = audioBuffer;
+      musicNode.loop = true;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.18;
+      musicNode.connect(gain).connect(destination);
+    }
   }
 
   const videoStream = previewCanvas.captureStream(30);
-  const combined = new MediaStream([...videoStream.getVideoTracks(), ...destination.stream.getAudioTracks()]);
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
-    ? "video/webm;codecs=vp9,opus"
-    : "video/webm";
+  const audioTracks = destination ? destination.stream.getAudioTracks() : [];
+  const combined = new MediaStream([...videoStream.getVideoTracks(), ...audioTracks]);
   const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 6_000_000 });
   const chunks = [];
   recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
@@ -366,7 +442,7 @@ export async function exportVideo({
 
   try {
     if (wantTitleCard && !cancelToken.cancelled) {
-      await paintTitleCard(ctx, W, H, doc.title || "Document", theme, 3000);
+      await paintTitleCard(ctx, W, H, doc.title || "Document", theme, 3000, () => cancelToken.cancelled);
     }
     if (!cancelToken.cancelled) {
       if (animation === "slides") {
@@ -386,8 +462,8 @@ export async function exportVideo({
     micStream?.getTracks().forEach((t) => t.stop());
     try { musicNode?.stop(); } catch { /* already stopped */ }
     await stopped;
-    await audioCtx.close();
+    if (audioCtx) await audioCtx.close();
   }
 
-  return new Blob(chunks, { type: "video/webm" });
+  return new Blob(chunks, { type: mimeType });
 }

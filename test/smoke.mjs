@@ -1,15 +1,29 @@
-import { chromium } from "playwright-core";
+import { chromium, firefox } from "playwright-core";
 
 const SAMPLE_PDF = "/usr/share/doc/fonts-lmodern/lm-info.pdf";
 const SAMPLE_TXT = "/tmp/sample.txt";
 const BASE_URL = "http://localhost:8934";
 const isLocalStaticServer = BASE_URL.includes("localhost");
+const BROWSER_NAME = process.env.BROWSER || "chromium"; // "chromium" or "firefox"
 
-const browser = await chromium.launch({
-  executablePath: "/usr/bin/chromium",
-  args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--no-sandbox"],
-});
-const context = await browser.newContext({ permissions: ["microphone"] });
+let browser, contextOptions;
+if (BROWSER_NAME === "firefox") {
+  // Uses Playwright's own patched Firefox build (npx playwright install firefox),
+  // not the system firefox-esr — vanilla system Firefox doesn't speak Playwright's
+  // automation protocol. Fake mic/camera via preferences rather than Chromium's
+  // --use-fake-*-for-media-stream flags, which Firefox doesn't have.
+  browser = await firefox.launch({ headless: true });
+  contextOptions = {
+    firefoxUserPrefs: { "media.navigator.streams.fake": true, "media.navigator.permission.disabled": true },
+  };
+} else {
+  browser = await chromium.launch({
+    executablePath: "/usr/bin/chromium",
+    args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--no-sandbox"],
+  });
+  contextOptions = { permissions: ["microphone"] };
+}
+const context = await browser.newContext(contextOptions);
 const page = await context.newPage();
 
 const errors = [];
@@ -430,27 +444,66 @@ await step("DOCX/TXT get split into multiple slides in slide mode (not squeezed 
   if (maxSlideTotal <= 1) throw new Error(`expected multiple slides for a ${paragraphCount}-paragraph doc, got ${maxSlideTotal}`);
 });
 
+// Checking only blob.src.startsWith("blob:") previously let a real bug through
+// undetected across multiple deploys: an unconnected audio destination track (exactly
+// what "mic off, no music" produces) corrupted the *entire* muxed output, not just the
+// audio — every one of these "passing" tests was silently producing a ~110-byte,
+// unplayable file. Fetching the actual blob and asserting a realistic minimum size is
+// what would have caught it; a real few-second 1080px recording is invariably tens to
+// hundreds of KB, so this threshold has wide margin without being a fragile exact match.
+const MIN_VALID_VIDEO_BYTES = 5000;
+
 for (const animation of ["scroll", "scrollZoom", "slides"]) {
-  await step(`Video export produces a playable webm blob (${animation}, sunrise theme)`, async () => {
+  await step(`Video export produces a real, non-empty webm file (${animation}, sunrise theme, no mic)`, async () => {
     const fileInput = await page.$("#file-input");
     await fileInput.setInputFiles("/tmp/sample.txt");
     await page.waitForFunction(() => !document.getElementById("scroll-controls").hidden, { timeout: 20000 });
 
     await page.click("#export-video-btn", { timeout: 4000 });
-    await page.uncheck("#export-mic"); // headless has no real mic audio; test the video pipeline itself
+    await page.uncheck("#export-mic"); // exactly the scenario that silently broke every prior "passing" run
     await page.selectOption("#export-animation", animation);
     await page.selectOption("#export-theme", "sunrise");
     if (animation !== "slides") await page.fill("#export-speed", "400"); // keep test fast
     await page.click("#export-start-btn", { timeout: 4000 });
 
     await page.waitForSelector("#export-result:not([hidden])", { timeout: 40000 });
-    const videoInfo = await page.$eval("#export-preview-video", (el) => ({
-      hasSrc: !!el.src && el.src.startsWith("blob:"),
-    }));
+    const videoInfo = await page.$eval("#export-preview-video", async (el) => {
+      const hasSrc = !!el.src && el.src.startsWith("blob:");
+      const res = await fetch(el.src);
+      const buf = await res.arrayBuffer();
+      return { hasSrc, byteLength: buf.byteLength };
+    });
     if (!videoInfo.hasSrc) throw new Error("export video element has no blob src");
+    if (videoInfo.byteLength < MIN_VALID_VIDEO_BYTES) {
+      throw new Error(`exported file is only ${videoInfo.byteLength} bytes — looks like the broken-empty-container bug, not a real recording`);
+    }
     await page.click("#export-close-btn", { timeout: 4000 });
   });
 }
+
+await step("Video export with mic narration (real connected audio source) is also non-empty", async () => {
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample.txt");
+  await page.waitForFunction(() => !document.getElementById("scroll-controls").hidden, { timeout: 20000 });
+
+  await page.click("#export-video-btn", { timeout: 4000 });
+  await page.selectOption("#export-animation", "scroll"); // previous test left it on "slides", which hides the speed field
+  // Leave #export-mic checked (its default) — a real connected source, the other
+  // branch of the audio-track fix, covered separately from the no-audio tests above.
+  await page.fill("#export-speed", "400");
+  await page.click("#export-start-btn", { timeout: 4000 });
+
+  await page.waitForSelector("#export-result:not([hidden])", { timeout: 40000 });
+  const videoInfo = await page.$eval("#export-preview-video", async (el) => {
+    const res = await fetch(el.src);
+    const buf = await res.arrayBuffer();
+    return { byteLength: buf.byteLength };
+  });
+  if (videoInfo.byteLength < MIN_VALID_VIDEO_BYTES) {
+    throw new Error(`exported file with mic enabled is only ${videoInfo.byteLength} bytes`);
+  }
+  await page.click("#export-close-btn", { timeout: 4000 });
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 console.log("\n--- Console/page errors captured ---");

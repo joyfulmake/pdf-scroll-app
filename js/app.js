@@ -9,7 +9,7 @@ import { NotesPanel } from "./notes.js";
 import { ThemeSwitcher } from "./theme.js";
 import { SidebarResizer } from "./sidebarResize.js";
 import { explainSelection, summarizeText } from "./aiClient.js";
-import { exportVideo } from "./videoExport.js";
+import { exportVideo, checkVideoExportSupport } from "./videoExport.js";
 import { showToast } from "./utils.js";
 
 const $ = (id) => document.getElementById(id);
@@ -328,6 +328,11 @@ function syncExportSpeedFieldVisibility() {
 
 exportVideoBtn.addEventListener("click", () => {
   if (!currentDoc) return;
+  const unsupportedReason = checkVideoExportSupport();
+  if (unsupportedReason) {
+    showToast(unsupportedReason, 6000);
+    return;
+  }
   exportModal.hidden = false;
   exportForm.hidden = false;
   document.querySelector("#export-modal .modal-actions").hidden = false;
@@ -373,7 +378,10 @@ $("export-start-btn").addEventListener("click", async () => {
     $("export-preview-video").src = url;
     $("export-download-link").href = url;
     const safeName = (currentDoc.title || "reading").replace(/[^\w-]+/g, "-").slice(0, 60);
-    $("export-download-link").download = `${safeName}.webm`;
+    // Older Safari (<18.4) can only produce mp4, not webm — name the file to match
+    // whatever the browser actually encoded, rather than assuming webm.
+    const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+    $("export-download-link").download = `${safeName}.${ext}`;
     exportLive.hidden = true;
     exportResult.hidden = false;
   } catch (err) {
