@@ -88,6 +88,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces above fit together, wh
 - Uses your microphone live while the scroll plays — read along at whatever pace you like; the scroll speed slider controls how fast it moves.
 - Burned-in captions are synced to **scroll position**, not to speech-recognized words (there's no speech-to-text step) — so they track along with what's currently on screen, not word-for-word with your voice.
 - Long documents produce long videos; there's no time limit, but very large documents will take a while to rasterize before recording starts.
+- Before starting, the app checks that your browser actually supports recording (MediaRecorder, `canvas.captureStream`, a usable video format, Web Audio) and shows a clear message instead of failing partway through if something's missing.
+
+### Browser/platform support
+
+Empirically tested (not just assumed) on both **Chrome/Chromium** and **Firefox** — every automated check in `test/smoke.mjs`, including a full video export end-to-end, passes on both, run against the live deployment. Two real bugs were only caught this way: one via directly inspecting exported files with OpenCV/ffmpeg outside the browser (a broken export that "worked" by every in-browser check), and one specific to Firefox's `MediaRecorder` (a codec option that hung silently with no error).
+
+**Safari**: not tested directly here (no Safari available in this project's dev/CI environment), but per [WebKit's own release notes](https://webkit.org/blog/) and community testing, Safari only gained WebM `MediaRecorder` support in **version 18.4** (March 2025) — earlier versions support MP4/H.264 only. This app's fallback chain (`video/webm;codecs=vp9,opus` → `video/webm` → `video/mp4`) should make export work on Safari 18.4+ as WebM and on older Safari as MP4, and the file extension is chosen to match whichever the browser actually produced — but this hasn't been verified on a real Safari/iOS device. If you hit an issue there, please open one.
+
+**Output format compatibility**: `.webm` is an [officially supported upload format on LinkedIn](https://www.linkedin.com/help/linkedin/answer/a1311816) (alongside MP4, MKV, and others) — confirmed directly against LinkedIn's own help documentation, not assumed. For platforms that are pickier about format (some prefer MP4/H.264 specifically), you may want to re-encode the downloaded file with a tool like HandBrake or ffmpeg before uploading.
 
 ## Deploying
 
