@@ -237,16 +237,22 @@ function buildContentBands(segments) {
   return bands;
 }
 
-// Y offsets (one per page after the first) where the scroll briefly holds — a beat that
-// reads as "it noticed it just left one page and is about to start reading the next."
-function pageBreakYs(rendered) {
-  let cumY = 0;
-  const breaks = [];
-  for (let i = 0; i < rendered.length; i++) {
-    if (i > 0) breaks.push(cumY);
-    cumY += rendered[i].height;
+// Y offsets where the scroll should briefly hold right before it starts — a beat that
+// reads as "it noticed the blank stretch it just crossed and is about to start reading
+// again," rather than firing at a fixed pixel seam that may sit well before the next
+// page's text actually begins (e.g. a page with a large top margin). Only fires ahead of
+// a *real* blank stretch (a page transition, a section break) — small inter-paragraph
+// spacing is left alone so continuous prose doesn't stutter on every line.
+const MIN_GAP_FOR_PAUSE = 60;
+
+function contentRevealYs(bands) {
+  const ys = [];
+  let prevEnd = 0;
+  for (const b of bands) {
+    if (b.start - prevEnd >= MIN_GAP_FOR_PAUSE) ys.push(b.start);
+    prevEnd = b.end;
   }
-  return breaks;
+  return ys;
 }
 
 // Content bands scroll at CONTENT_FACTOR × base speed (slow enough to actually read),
@@ -290,13 +296,13 @@ function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t,
   }
 }
 
-const PAGE_BREAK_HOLD_MS = 500;
+const CONTENT_REVEAL_HOLD_MS = 500;
 
-async function animateScroll({ ctx, filmstrip, segments, rendered, W, H, totalHeight, speed, style, theme, wantCaptions, onStatus, isCancelled }) {
+async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, speed, style, theme, wantCaptions, onStatus, isCancelled }) {
   const maxY = Math.max(0, totalHeight - H);
   const bands = buildContentBands(segments);
   const gapFactor = computeGapFactor(bands, maxY);
-  const pendingBreaks = pageBreakYs(rendered);
+  const pendingReveals = contentRevealYs(bands);
 
   let offsetY = 0;
   let lastTick = performance.now();
@@ -310,14 +316,14 @@ async function animateScroll({ ctx, filmstrip, segments, rendered, W, H, totalHe
     const factor = speedFactorAt(offsetY, bands, gapFactor);
     offsetY = Math.min(maxY, offsetY + speed * factor * dt);
 
-    // Pause the instant we cross into a new page — "left the previous page, about to
-    // start reading this one" — then keep going. Redraws every frame throughout the
-    // hold (a static canvas produces no real captured video, per exportVideo's title
-    // card handling above).
-    if (pendingBreaks.length && offsetY >= pendingBreaks[0]) {
-      offsetY = Math.min(maxY, pendingBreaks.shift());
+    // Pause right as a blank stretch is about to give way to real content again — not
+    // at a fixed pixel seam, which can sit well before the text if a page has a big top
+    // margin. Redraws every frame throughout the hold (a static canvas produces no real
+    // captured video, per exportVideo's title card handling above).
+    if (pendingReveals.length && offsetY >= pendingReveals[0]) {
+      offsetY = Math.min(maxY, pendingReveals.shift());
       const holdStart = performance.now();
-      while (performance.now() - holdStart < PAGE_BREAK_HOLD_MS) {
+      while (performance.now() - holdStart < CONTENT_REVEAL_HOLD_MS) {
         if (isCancelled()) return;
         drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t: maxY > 0 ? offsetY / maxY : 0, theme, wantCaptions, segments });
         onStatus?.(`Recording… ${Math.round((offsetY / maxY) * 100 || 100)}%`);
@@ -531,7 +537,7 @@ export async function exportVideo({
         });
       } else {
         await animateScroll({
-          ctx, filmstrip, segments: atomicSegments, rendered, W, H, totalHeight, speed, style: animation, theme, wantCaptions, onStatus,
+          ctx, filmstrip, segments: atomicSegments, W, H, totalHeight, speed, style: animation, theme, wantCaptions, onStatus,
           isCancelled: () => cancelToken.cancelled,
         });
       }
