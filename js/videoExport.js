@@ -15,7 +15,8 @@
 const ASPECTS = {
   square: { w: 1080, h: 1080, label: "Square 1:1 (LinkedIn feed)" },
   vertical: { w: 1080, h: 1920, label: "Vertical 9:16 (Stories/Reels)" },
-  landscape: { w: 1920, h: 1080, label: "Landscape 16:9" },
+  landscape: { w: 1920, h: 1080, label: "Landscape 16:9 (YouTube/wide)" },
+  landscapeClassic: { w: 1440, h: 1080, label: "Landscape 4:3 (closer fit for document pages)" },
 };
 
 const THEMES = {
@@ -353,13 +354,43 @@ function drawContainFrame(ctx, W, H, srcCanvas, srcY, srcH, theme, alpha = 1) {
   ctx.restore();
 }
 
+// A "contain" fit (drawContainFrame above) never crops the page, but when the page's
+// aspect ratio is far from the frame's (a tall portrait document page in a wide 16:9
+// frame, say) it leaves large flat bars on whichever sides don't touch — previously
+// filled with a flat theme color, which read as the content being squeezed into a
+// strip with dead space either side rather than filling the video. This fills those
+// bars with a blurred, darkened "cover" crop of the *same* page instead, so the frame
+// looks fully occupied while the sharp, complete page still sits centered on top.
+// Built once per slide (not redrawn every animation frame) since canvas blur filters
+// are too costly to re-run 30 times a second.
+function buildBlurredBackdrop(W, H, srcCanvas, srcY, srcH) {
+  const backdrop = document.createElement("canvas");
+  backdrop.width = W;
+  backdrop.height = H;
+  const bctx = backdrop.getContext("2d");
+  const srcW = srcCanvas.width;
+  // Overscan the cover-fit crop so the blur kernel always samples real image content
+  // near the frame edges rather than the canvas's (transparent) outside.
+  const scale = Math.max(W / srcW, H / srcH) * 1.2;
+  const dw = srcW * scale;
+  const dh = srcH * scale;
+  bctx.filter = `blur(${Math.round(W * 0.025)}px) brightness(0.55)`;
+  bctx.drawImage(srcCanvas, 0, srcY, srcW, srcH, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  return backdrop;
+}
+
 async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions, onStatus, isCancelled }) {
   const TRANSITION_MS = 450;
+  const backdropFor = (group) => {
+    const crop = nativeCropForGroup(rendered, group);
+    return buildBlurredBackdrop(W, H, crop.srcCanvas, crop.srcY, crop.srcH);
+  };
 
   for (let i = 0; i < groups.length; i++) {
     if (isCancelled()) return;
     const group = groups[i];
     const crop = nativeCropForGroup(rendered, group);
+    const backdrop = backdropFor(group);
     onStatus?.(`Recording… slide ${i + 1}/${groups.length}`);
 
     const dwell = dwellMsFor(group.text);
@@ -368,6 +399,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
       if (isCancelled()) return;
       ctx.fillStyle = theme.slideBg;
       ctx.fillRect(0, 0, W, H);
+      ctx.drawImage(backdrop, 0, 0);
       drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme);
       if (wantCaptions) drawCaption(ctx, W, H, theme, group.text);
       await new Promise((r) => requestAnimationFrame(r));
@@ -376,12 +408,21 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
     const nextGroup = groups[i + 1];
     if (!nextGroup) continue;
     const nextCrop = nativeCropForGroup(rendered, nextGroup);
+    const nextBackdrop = backdropFor(nextGroup);
     const transStart = performance.now();
     while (true) {
       if (isCancelled()) return;
       const t = Math.min(1, (performance.now() - transStart) / TRANSITION_MS);
       ctx.fillStyle = theme.slideBg;
       ctx.fillRect(0, 0, W, H);
+      ctx.save();
+      ctx.globalAlpha = 1 - t;
+      ctx.drawImage(backdrop, 0, 0);
+      ctx.restore();
+      ctx.save();
+      ctx.globalAlpha = t;
+      ctx.drawImage(nextBackdrop, 0, 0);
+      ctx.restore();
       drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme, 1 - t);
       drawContainFrame(ctx, W, H, nextCrop.srcCanvas, nextCrop.srcY, nextCrop.srcH, theme, t);
       if (wantCaptions) drawCaption(ctx, W, H, theme, t < 0.5 ? group.text : nextGroup.text);
