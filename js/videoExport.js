@@ -219,35 +219,114 @@ function drawCaption(ctx, W, H, theme, text) {
   lines.forEach((line, i) => ctx.fillText(line, pad, H - barHeight + pad * 0.6 + i * (fontSize * 1.35)));
 }
 
-async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, speed, style, theme, wantCaptions, onStatus, isCancelled }) {
-  const maxY = Math.max(0, totalHeight - H);
-  const duration = speed > 0 ? maxY / speed : 0;
-  const start = performance.now();
+// Merges atomic segments' Y-ranges (padded slightly so the slow-down eases in just
+// ahead of the text rather than at its exact pixel edge) into non-overlapping "content"
+// bands. Everything outside those bands is margin/whitespace, where the scroll can move
+// through faster without anything readable flying past.
+function buildContentBands(segments) {
+  const pad = 8;
+  const sorted = segments
+    .map((s) => ({ start: Math.max(0, s.startY - pad), end: s.endY + pad }))
+    .sort((a, b) => a.start - b.start);
+  const bands = [];
+  for (const r of sorted) {
+    const last = bands[bands.length - 1];
+    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end);
+    else bands.push({ ...r });
+  }
+  return bands;
+}
+
+// Y offsets (one per page after the first) where the scroll briefly holds — a beat that
+// reads as "it noticed it just left one page and is about to start reading the next."
+function pageBreakYs(rendered) {
+  let cumY = 0;
+  const breaks = [];
+  for (let i = 0; i < rendered.length; i++) {
+    if (i > 0) breaks.push(cumY);
+    cumY += rendered[i].height;
+  }
+  return breaks;
+}
+
+// Content bands scroll at CONTENT_FACTOR × base speed (slow enough to actually read),
+// margin gaps scroll fast enough that the two average back out to roughly the speed the
+// user configured — so "slow down for text, speed through the gaps" doesn't quietly
+// double or halve the video's total length.
+const CONTENT_FACTOR = 0.45;
+
+function computeGapFactor(bands, maxY) {
+  const contentHeight = bands.reduce((s, b) => s + (Math.min(b.end, maxY) - Math.min(b.start, maxY)), 0);
+  const gapHeight = Math.max(1, maxY - contentHeight);
+  const remaining = maxY - contentHeight / CONTENT_FACTOR;
+  if (remaining <= 0) return 1; // content alone already exceeds the baseline duration — don't also speed up gaps
+  return clamp(gapHeight / remaining, 1, 4);
+}
+
+function speedFactorAt(y, bands, gapFactor) {
+  for (const b of bands) {
+    if (y < b.start) return gapFactor;
+    if (y < b.end) return CONTENT_FACTOR;
+  }
+  return gapFactor;
+}
+
+function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t, theme, wantCaptions, segments }) {
   const maxZoom = 1.08;
+  ctx.clearRect(0, 0, W, H);
+  if (style === "scrollZoom") {
+    const zoom = 1 + t * (maxZoom - 1);
+    const srcW = W / zoom;
+    const srcH = H / zoom;
+    const srcX = (W - srcW) / 2;
+    const srcY = clamp(offsetY + (H - srcH) / 2, 0, Math.max(0, totalHeight - srcH));
+    ctx.drawImage(filmstrip, srcX, srcY, srcW, srcH, 0, 0, W, H);
+  } else {
+    ctx.drawImage(filmstrip, 0, offsetY, W, H, 0, 0, W, H);
+  }
+  if (wantCaptions) {
+    const seg = segments.find((s) => offsetY + H * 0.4 >= s.startY && offsetY + H * 0.4 < s.endY) || segments[segments.length - 1];
+    drawCaption(ctx, W, H, theme, seg?.text);
+  }
+}
+
+const PAGE_BREAK_HOLD_MS = 500;
+
+async function animateScroll({ ctx, filmstrip, segments, rendered, W, H, totalHeight, speed, style, theme, wantCaptions, onStatus, isCancelled }) {
+  const maxY = Math.max(0, totalHeight - H);
+  const bands = buildContentBands(segments);
+  const gapFactor = computeGapFactor(bands, maxY);
+  const pendingBreaks = pageBreakYs(rendered);
+
+  let offsetY = 0;
+  let lastTick = performance.now();
 
   while (true) {
     if (isCancelled()) return;
-    const elapsedSec = (performance.now() - start) / 1000;
-    const offsetY = Math.min(maxY, elapsedSec * speed);
+    const now = performance.now();
+    const dt = (now - lastTick) / 1000;
+    lastTick = now;
 
-    ctx.clearRect(0, 0, W, H);
-    if (style === "scrollZoom") {
-      const t = duration > 0 ? Math.min(1, elapsedSec / duration) : 0;
-      const zoom = 1 + t * (maxZoom - 1);
-      const srcW = W / zoom;
-      const srcH = H / zoom;
-      const srcX = (W - srcW) / 2;
-      const srcY = clamp(offsetY + (H - srcH) / 2, 0, Math.max(0, totalHeight - srcH));
-      ctx.drawImage(filmstrip, srcX, srcY, srcW, srcH, 0, 0, W, H);
-    } else {
-      ctx.drawImage(filmstrip, 0, offsetY, W, H, 0, 0, W, H);
+    const factor = speedFactorAt(offsetY, bands, gapFactor);
+    offsetY = Math.min(maxY, offsetY + speed * factor * dt);
+
+    // Pause the instant we cross into a new page — "left the previous page, about to
+    // start reading this one" — then keep going. Redraws every frame throughout the
+    // hold (a static canvas produces no real captured video, per exportVideo's title
+    // card handling above).
+    if (pendingBreaks.length && offsetY >= pendingBreaks[0]) {
+      offsetY = Math.min(maxY, pendingBreaks.shift());
+      const holdStart = performance.now();
+      while (performance.now() - holdStart < PAGE_BREAK_HOLD_MS) {
+        if (isCancelled()) return;
+        drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t: maxY > 0 ? offsetY / maxY : 0, theme, wantCaptions, segments });
+        onStatus?.(`Recording… ${Math.round((offsetY / maxY) * 100 || 100)}%`);
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      lastTick = performance.now();
     }
 
-    if (wantCaptions) {
-      const seg = segments.find((s) => offsetY + H * 0.4 >= s.startY && offsetY + H * 0.4 < s.endY) || segments[segments.length - 1];
-      drawCaption(ctx, W, H, theme, seg?.text);
-    }
-
+    drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t: maxY > 0 ? offsetY / maxY : 0, theme, wantCaptions, segments });
     onStatus?.(`Recording… ${Math.round((offsetY / maxY) * 100 || 100)}%`);
 
     if (offsetY >= maxY) break;
@@ -452,7 +531,7 @@ export async function exportVideo({
         });
       } else {
         await animateScroll({
-          ctx, filmstrip, segments: atomicSegments, W, H, totalHeight, speed, style: animation, theme, wantCaptions, onStatus,
+          ctx, filmstrip, segments: atomicSegments, rendered, W, H, totalHeight, speed, style: animation, theme, wantCaptions, onStatus,
           isCancelled: () => cancelToken.cancelled,
         });
       }
