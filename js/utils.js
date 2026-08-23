@@ -53,3 +53,32 @@ export function timestamp() {
 export function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
+
+// Finds the horizontal extent of actual content (text/graphics) on a rendered canvas,
+// as a 0-1 fraction of its width. Used both by video export and the PDF reading view to
+// zoom/pan into the real content column instead of showing a page's full width, print
+// margins included — pixel-scanning is the only format-agnostic way to find this,
+// since PDF pages in particular have no per-line DOM structure to measure (pdf.js hands
+// back one flat rasterized page image, not positioned text nodes for the visible glyphs).
+export function detectContentColumn(canvas) {
+  const w = canvas.width, h = canvas.height;
+  if (!w || !h) return { left: 0, right: 1 };
+  const ctx = canvas.getContext("2d");
+  const { data } = ctx.getImageData(0, 0, w, h);
+  const strideX = Math.max(1, Math.floor(w / 300));
+  const strideY = Math.max(1, Math.floor(h / 300));
+  let minX = w, maxX = -1;
+  for (let y = 0; y < h; y += strideY) {
+    const rowOffset = y * w;
+    for (let x = 0; x < w; x += strideX) {
+      const idx = (rowOffset + x) * 4;
+      const lum = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+      if (data[idx + 3] > 10 && lum < 245) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
+  }
+  if (maxX < minX) return { left: 0, right: 1 }; // blank page — nothing to zoom toward
+  return { left: minX / w, right: clamp((maxX + strideX) / w, 0, 1) };
+}

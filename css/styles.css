@@ -617,9 +617,15 @@ legend {
   align-items: center;
 }
 #export-canvas, #export-preview-video {
-  width: 100%;
+  /* max-width/max-height + auto sizing (not width:100% + object-fit) so the element's
+     own CSS box shrinks to match its intrinsic aspect ratio — width:100% previously set
+     the box width independently of the max-height cap, so a tall 9:16 export's box
+     stayed exactly as wide as a landscape one while its height got capped, leaving the
+     black background exposed as pillarbox bars down both sides during recording. */
+  max-width: 100%;
   max-height: 360px;
-  object-fit: contain;
+  width: auto;
+  height: auto;
   background: #000;
   border-radius: 8px;
 }

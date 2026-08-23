@@ -12,6 +12,8 @@
 // one frame — this module further divides those into segments using the same
 // paragraph-level `doc.textBlocks` the rest of the app already tracks for voice/AI sync.
 
+import { clamp, detectContentColumn } from "./utils.js";
+
 const ASPECTS = {
   square: { w: 1080, h: 1080, label: "Square 1:1 (LinkedIn feed)" },
   vertical: { w: 1080, h: 1920, label: "Vertical 9:16 (Stories/Reels)" },
@@ -33,10 +35,6 @@ const ANIMATIONS = {
 };
 
 export { ASPECTS, THEMES, ANIMATIONS };
-
-function clamp(v, min, max) {
-  return Math.max(min, Math.min(max, v));
-}
 
 function cleanText(text) {
   return (text || "").replace(/\s+/g, " ").trim();
@@ -110,7 +108,8 @@ async function buildPages(pagesContainer, targetWidth, onStatus) {
     const el = pageEls[i];
     const srcCanvas = await rasterizeElement(el, targetWidth);
     const height = Math.round(srcCanvas.height * (targetWidth / srcCanvas.width));
-    rendered.push({ srcCanvas, height, el });
+    const contentColumn = detectContentColumn(srcCanvas);
+    rendered.push({ srcCanvas, height, el, contentColumn });
   }
   return rendered;
 }
@@ -140,7 +139,7 @@ function computeAtomicSegments(rendered, doc) {
   const segments = [];
   let cumY = 0;
   for (let pageIndex = 0; pageIndex < rendered.length; pageIndex++) {
-    const { el, height: pageHeight } = rendered[pageIndex];
+    const { el, height: pageHeight, contentColumn } = rendered[pageIndex];
     const elRect = el.getBoundingClientRect();
     const blocksInside = doc.textBlocks.filter((b) => el.contains(b.el));
     const units = blocksInside.length
@@ -162,6 +161,13 @@ function computeAtomicSegments(rendered, doc) {
         pageLocalStartY,
         pageLocalEndY,
         pageIndex,
+        // Horizontal extent of real content vs. margin, as a 0-1 fraction of the page's
+        // width — detected from the rendered pixels (see detectContentColumn), since
+        // PDF's textBlock is the whole page and carries no per-line horizontal info.
+        // Same value for every segment on a page: the zoom adjusts per page, not
+        // per-line, which is where the margin actually changes.
+        fracLeft: contentColumn.left,
+        fracWidth: contentColumn.right - contentColumn.left,
         text: cleanText(u.text).slice(0, 240),
       });
     }
@@ -224,16 +230,25 @@ function drawCaption(ctx, W, H, theme, text) {
 // ahead of the text rather than at its exact pixel edge) into non-overlapping "content"
 // bands. Everything outside those bands is margin/whitespace, where the scroll can move
 // through faster without anything readable flying past.
+// Each band also carries the horizontal extent (0-1 fraction of page width) of the
+// content inside it, unioned across whatever segments merged into it — this is what
+// lets the frame zoom in on just the text column instead of showing the page's full
+// width, margins included.
 function buildContentBands(segments) {
   const pad = 8;
   const sorted = segments
-    .map((s) => ({ start: Math.max(0, s.startY - pad), end: s.endY + pad }))
+    .map((s) => ({ start: Math.max(0, s.startY - pad), end: s.endY + pad, hLeft: s.fracLeft, hRight: clamp(s.fracLeft + s.fracWidth, 0, 1) }))
     .sort((a, b) => a.start - b.start);
   const bands = [];
   for (const r of sorted) {
     const last = bands[bands.length - 1];
-    if (last && r.start <= last.end) last.end = Math.max(last.end, r.end);
-    else bands.push({ ...r });
+    if (last && r.start <= last.end) {
+      last.end = Math.max(last.end, r.end);
+      last.hLeft = Math.min(last.hLeft, r.hLeft);
+      last.hRight = Math.max(last.hRight, r.hRight);
+    } else {
+      bands.push({ ...r });
+    }
   }
   return bands;
 }
@@ -265,8 +280,8 @@ function contentRevealYs(bands) {
 // MAX_CONTENT_SPEEDUP× its configured pace to get there — a truly long document is
 // instead allowed to run longer (up to the hard HARD_MAX_DURATION_S ceiling) rather
 // than becoming unreadably fast.
-const SOFT_MAX_DURATION_S = 240; // ~4 min: typical documents shouldn't generally run past this
-const HARD_MAX_DURATION_S = 600; // 10 min: absolute ceiling, even for very large documents
+const SOFT_MAX_DURATION_S = 180; // 3 min: typical documents shouldn't generally run past this
+const HARD_MAX_DURATION_S = 300; // 5 min: absolute ceiling, even for very large documents
 const MAX_CONTENT_SPEEDUP = 2.5; // how much faster than configured pace content may be pushed to hit the soft target
 const GAP_SPEED_MULTIPLIER = 6; // how much faster than reading pace margins/whitespace move
 
@@ -294,30 +309,57 @@ function speedAt(y, bands, contentSpeed, gapSpeed) {
   return gapSpeed;
 }
 
-function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t, theme, wantCaptions, segments }) {
-  const maxZoom = 1.08;
-  ctx.clearRect(0, 0, W, H);
-  if (style === "scrollZoom") {
-    const zoom = 1 + t * (maxZoom - 1);
-    const srcW = W / zoom;
-    const srcH = H / zoom;
-    const srcX = (W - srcW) / 2;
-    const srcY = clamp(offsetY + (H - srcH) / 2, 0, Math.max(0, totalHeight - srcH));
-    ctx.drawImage(filmstrip, srcX, srcY, srcW, srcH, 0, 0, W, H);
-  } else {
-    ctx.drawImage(filmstrip, 0, offsetY, W, H, 0, 0, W, H);
+// How far past a content band's tightest bounding box the crop keeps as breathing room,
+// and how far in it's ever allowed to zoom — a cap so a single short heading doesn't
+// get blown up to fill the whole frame edge-to-edge.
+const CROP_PADDING_FRAC = 0.08;
+const CONTENT_MAX_ZOOM = 2.2;
+// "scrollZoom" style layers its own slow, continuous zoom on top of the content crop —
+// this is that effect's ceiling, applied as an extra multiplier over the video's length.
+const KEN_BURNS_MAX = 1.08;
+
+// Where the frame should be centered/zoomed horizontally at a given scroll position: the
+// band containing y, or — while still crossing the gap leading up to it — the *next*
+// band, so the zoom has already settled into place by the time that content arrives
+// rather than snapping the instant it appears. Falls back to the full page width when
+// there's no nearby band (e.g. past the last one).
+function cropTargetAt(y, bands) {
+  for (const b of bands) {
+    if (y < b.end) {
+      const width = Math.max(1e-6, b.hRight - b.hLeft);
+      const pad = width * CROP_PADDING_FRAC;
+      const left = clamp(b.hLeft - pad, 0, 1);
+      const right = clamp(b.hRight + pad, 0, 1);
+      const zoom = clamp(1 / Math.max(right - left, 1 / CONTENT_MAX_ZOOM), 1, CONTENT_MAX_ZOOM);
+      return { center: (left + right) / 2, zoom };
+    }
   }
+  return { center: 0.5, zoom: 1 };
+}
+
+function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t, theme, wantCaptions, segments, cropCenter, cropZoom }) {
+  ctx.clearRect(0, 0, W, H);
+  const extraZoom = style === "scrollZoom" ? 1 + t * (KEN_BURNS_MAX - 1) : 1;
+  const zoom = cropZoom * extraZoom;
+  const srcW = W / zoom;
+  const srcH = H / zoom;
+  const srcX = clamp(cropCenter * W - srcW / 2, 0, Math.max(0, W - srcW));
+  const srcY = clamp(offsetY + (H - srcH) / 2, 0, Math.max(0, totalHeight - srcH));
+  ctx.drawImage(filmstrip, srcX, srcY, srcW, srcH, 0, 0, W, H);
   if (wantCaptions) {
-    const seg = segments.find((s) => offsetY + H * 0.4 >= s.startY && offsetY + H * 0.4 < s.endY) || segments[segments.length - 1];
+    const focusY = srcY + srcH * 0.4;
+    const seg = segments.find((s) => focusY >= s.startY && focusY < s.endY) || segments[segments.length - 1];
     drawCaption(ctx, W, H, theme, seg?.text);
   }
 }
 
 const CONTENT_REVEAL_HOLD_MS = 500;
-// Time constant for easing the scroll speed toward its target (content pace vs. fast
-// gap pace) instead of snapping to it — a soft ramp reads as deliberate, an instant
-// jump in velocity reads as a glitch.
+// Time constants for easing the scroll speed and the crop/zoom toward their targets
+// instead of snapping — a soft ramp reads as deliberate, an instant jump reads as a
+// glitch. The crop eases more slowly than the speed does: a pan/zoom that settles in
+// gently is the whole point, unlike the speed changes which should feel prompt.
 const SPEED_EASE_TAU = 0.35;
+const CROP_EASE_TAU = 0.5;
 
 async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, speed, style, theme, wantCaptions, onStatus, isCancelled }) {
   const maxY = Math.max(0, totalHeight - H);
@@ -332,7 +374,17 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
 
   let offsetY = 0;
   let currentSpeed = speedAt(0, bands, contentSpeed, gapSpeed);
+  const initialCrop = cropTargetAt(0, bands);
+  let cropCenter = initialCrop.center;
+  let cropZoom = initialCrop.zoom;
   let lastTick = performance.now();
+
+  const easeCrop = (dt) => {
+    const target = cropTargetAt(offsetY, bands);
+    const k = 1 - Math.exp(-dt / CROP_EASE_TAU);
+    cropCenter += (target.center - cropCenter) * k;
+    cropZoom += (target.zoom - cropZoom) * k;
+  };
 
   while (true) {
     if (isCancelled()) return;
@@ -343,6 +395,7 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
     const targetSpeed = speedAt(offsetY, bands, contentSpeed, gapSpeed);
     currentSpeed += (targetSpeed - currentSpeed) * (1 - Math.exp(-dt / SPEED_EASE_TAU));
     offsetY = Math.min(maxY, offsetY + currentSpeed * dt);
+    easeCrop(dt);
 
     // Pause right as a blank stretch is about to give way to real content again — not
     // at a fixed pixel seam, which can sit well before the text if a page has a big top
@@ -351,16 +404,20 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
     if (pendingReveals.length && offsetY >= pendingReveals[0]) {
       offsetY = Math.min(maxY, pendingReveals.shift());
       const holdStart = performance.now();
+      let holdLastTick = holdStart;
       while (performance.now() - holdStart < CONTENT_REVEAL_HOLD_MS) {
         if (isCancelled()) return;
-        drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t: maxY > 0 ? offsetY / maxY : 0, theme, wantCaptions, segments });
+        const holdNow = performance.now();
+        easeCrop((holdNow - holdLastTick) / 1000);
+        holdLastTick = holdNow;
+        drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t: maxY > 0 ? offsetY / maxY : 0, theme, wantCaptions, segments, cropCenter, cropZoom });
         onStatus?.(`Recording… ${Math.round((offsetY / maxY) * 100 || 100)}%`);
         await new Promise((r) => requestAnimationFrame(r));
       }
       lastTick = performance.now();
     }
 
-    drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t: maxY > 0 ? offsetY / maxY : 0, theme, wantCaptions, segments });
+    drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t: maxY > 0 ? offsetY / maxY : 0, theme, wantCaptions, segments, cropCenter, cropZoom });
     onStatus?.(`Recording… ${Math.round((offsetY / maxY) * 100 || 100)}%`);
 
     if (offsetY >= maxY) break;
