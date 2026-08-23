@@ -256,26 +256,42 @@ function contentRevealYs(bands) {
   return ys;
 }
 
-// Content bands scroll at CONTENT_FACTOR × base speed (slow enough to actually read),
-// margin gaps scroll fast enough that the two average back out to roughly the speed the
-// user configured — so "slow down for text, speed through the gaps" doesn't quietly
-// double or halve the video's total length.
-const CONTENT_FACTOR = 0.45;
+// Content always scrolls at the caller's configured (readable) speed — never slowed
+// down further, never artificially padded out. Margins/whitespace move much faster
+// (GAP_SPEED_MULTIPLIER) since there's nothing there to read. The only adjustment on
+// top of that natural pace is a speed-*up*, and only once a document is long enough
+// that reading it at face value would run past a sane viewing length: compress toward
+// SOFT_MAX_DURATION_S first, but never push the content scroll faster than
+// MAX_CONTENT_SPEEDUP× its configured pace to get there — a truly long document is
+// instead allowed to run longer (up to the hard HARD_MAX_DURATION_S ceiling) rather
+// than becoming unreadably fast.
+const SOFT_MAX_DURATION_S = 240; // ~4 min: typical documents shouldn't generally run past this
+const HARD_MAX_DURATION_S = 600; // 10 min: absolute ceiling, even for very large documents
+const MAX_CONTENT_SPEEDUP = 2.5; // how much faster than configured pace content may be pushed to hit the soft target
+const GAP_SPEED_MULTIPLIER = 6; // how much faster than reading pace margins/whitespace move
 
-function computeGapFactor(bands, maxY) {
+function estimateRawDurationS(bands, maxY, pauseCount, readSpeed) {
   const contentHeight = bands.reduce((s, b) => s + (Math.min(b.end, maxY) - Math.min(b.start, maxY)), 0);
-  const gapHeight = Math.max(1, maxY - contentHeight);
-  const remaining = maxY - contentHeight / CONTENT_FACTOR;
-  if (remaining <= 0) return 1; // content alone already exceeds the baseline duration — don't also speed up gaps
-  return clamp(gapHeight / remaining, 1, 4);
+  const gapHeight = Math.max(0, maxY - contentHeight);
+  const contentTime = readSpeed > 0 ? contentHeight / readSpeed : 0;
+  const gapTime = readSpeed > 0 ? gapHeight / (readSpeed * GAP_SPEED_MULTIPLIER) : 0;
+  const pauseTime = (pauseCount * CONTENT_REVEAL_HOLD_MS) / 1000;
+  return contentTime + gapTime + pauseTime;
 }
 
-function speedFactorAt(y, bands, gapFactor) {
+// Never returns more than rawDuration (this only ever compresses, never stretches).
+function targetDurationFor(rawDuration) {
+  if (rawDuration <= SOFT_MAX_DURATION_S) return rawDuration;
+  if (rawDuration / SOFT_MAX_DURATION_S <= MAX_CONTENT_SPEEDUP) return SOFT_MAX_DURATION_S;
+  return clamp(rawDuration / MAX_CONTENT_SPEEDUP, SOFT_MAX_DURATION_S, HARD_MAX_DURATION_S);
+}
+
+function speedAt(y, bands, contentSpeed, gapSpeed) {
   for (const b of bands) {
-    if (y < b.start) return gapFactor;
-    if (y < b.end) return CONTENT_FACTOR;
+    if (y < b.start) return gapSpeed;
+    if (y < b.end) return contentSpeed;
   }
-  return gapFactor;
+  return gapSpeed;
 }
 
 function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t, theme, wantCaptions, segments }) {
@@ -298,14 +314,24 @@ function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t,
 }
 
 const CONTENT_REVEAL_HOLD_MS = 500;
+// Time constant for easing the scroll speed toward its target (content pace vs. fast
+// gap pace) instead of snapping to it — a soft ramp reads as deliberate, an instant
+// jump in velocity reads as a glitch.
+const SPEED_EASE_TAU = 0.35;
 
 async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, speed, style, theme, wantCaptions, onStatus, isCancelled }) {
   const maxY = Math.max(0, totalHeight - H);
   const bands = buildContentBands(segments);
-  const gapFactor = computeGapFactor(bands, maxY);
   const pendingReveals = contentRevealYs(bands);
 
+  const rawDuration = estimateRawDurationS(bands, maxY, pendingReveals.length, speed);
+  const targetDuration = targetDurationFor(rawDuration);
+  const durationScale = rawDuration > 0 ? rawDuration / targetDuration : 1;
+  const contentSpeed = speed * durationScale;
+  const gapSpeed = speed * GAP_SPEED_MULTIPLIER * durationScale;
+
   let offsetY = 0;
+  let currentSpeed = speedAt(0, bands, contentSpeed, gapSpeed);
   let lastTick = performance.now();
 
   while (true) {
@@ -314,8 +340,9 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
     const dt = (now - lastTick) / 1000;
     lastTick = now;
 
-    const factor = speedFactorAt(offsetY, bands, gapFactor);
-    offsetY = Math.min(maxY, offsetY + speed * factor * dt);
+    const targetSpeed = speedAt(offsetY, bands, contentSpeed, gapSpeed);
+    currentSpeed += (targetSpeed - currentSpeed) * (1 - Math.exp(-dt / SPEED_EASE_TAU));
+    offsetY = Math.min(maxY, offsetY + currentSpeed * dt);
 
     // Pause right as a blank stretch is about to give way to real content again — not
     // at a fixed pixel seam, which can sit well before the text if a page has a big top
@@ -379,8 +406,20 @@ function buildBlurredBackdrop(W, H, srcCanvas, srcY, srcH) {
   return backdrop;
 }
 
+// Same soft/hard viewing-length ceiling as scroll mode (see targetDurationFor above),
+// applied by uniformly compressing each slide's dwell time — never stretched, only
+// ever squeezed once the deck as a whole would otherwise run past the target length.
+function scaleDwellTimes(groups) {
+  const TRANSITION_MS = 450;
+  const natural = groups.reduce((s, g) => s + dwellMsFor(g.text), 0) + Math.max(0, groups.length - 1) * TRANSITION_MS;
+  const targetMs = targetDurationFor(natural / 1000) * 1000;
+  const scale = natural > 0 ? targetMs / natural : 1;
+  return groups.map((g) => clamp(dwellMsFor(g.text) * scale, 800, 8000));
+}
+
 async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions, onStatus, isCancelled }) {
   const TRANSITION_MS = 450;
+  const dwellTimes = scaleDwellTimes(groups);
   const backdropFor = (group) => {
     const crop = nativeCropForGroup(rendered, group);
     return buildBlurredBackdrop(W, H, crop.srcCanvas, crop.srcY, crop.srcH);
@@ -393,7 +432,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
     const backdrop = backdropFor(group);
     onStatus?.(`Recording… slide ${i + 1}/${groups.length}`);
 
-    const dwell = dwellMsFor(group.text);
+    const dwell = dwellTimes[i];
     const holdStart = performance.now();
     while (performance.now() - holdStart < dwell) {
       if (isCancelled()) return;
