@@ -93,11 +93,68 @@ async function paintTitleCard(ctx, W, H, title, theme, holdMs, isCancelled) {
   }
 }
 
+// html2canvas bundles its own CSS color parser (predates CSS Color 4) that throws
+// outright — aborting the whole export — the instant it encounters color-mix(),
+// oklch(), oklab(), lab(), lch(), or color(). Real browsers parse and render all of
+// these fine, so a real-world .html/.md upload with its own modern stylesheet (or even
+// just this app's own `<style>` blocks, in principle) can trip this the moment
+// html2canvas walks it. Rather than trying to hand-reimplement CSS colorimetry, this
+// asks the actual browser to resolve each occurrence to a plain rgb()/rgba() string
+// (via a throwaway element's computed style) and substitutes that in — works uniformly
+// for every unsupported function without needing to special-case any of them.
+const UNSUPPORTED_COLOR_FNS = ["color-mix", "oklch", "oklab", "lab", "lch", "color"];
+
+// getComputedStyle() is *not* a safe way to resolve these — its own reported computed
+// value can itself be oklab()/oklch() rather than always normalizing to rgb() (confirmed
+// empirically: assigning a color-mix() came back as an oklab() string), which would
+// just trade one unsupported function for another. A 1x1 canvas fillStyle + pixel
+// readback always resolves to concrete sRGB bytes regardless of what color space the
+// input was specified in, since canvas painting has to rasterize to real pixels.
+function resolveToRgbString(colorText, ctx) {
+  ctx.fillStyle = "#000000";
+  ctx.fillStyle = colorText; // silently ignored if invalid — falls back to the reset black
+  ctx.clearRect(0, 0, 1, 1);
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+  return `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(3)})`;
+}
+
+function resolveModernColorFunctions(cssText, ctx) {
+  let result = "";
+  let i = 0;
+  while (i < cssText.length) {
+    const name = UNSUPPORTED_COLOR_FNS.find((n) => cssText.startsWith(`${n}(`, i));
+    if (!name) { result += cssText[i]; i++; continue; }
+    let depth = 0, j = i + name.length;
+    for (; j < cssText.length; j++) {
+      if (cssText[j] === "(") depth++;
+      else if (cssText[j] === ")" && --depth === 0) { j++; break; }
+    }
+    result += resolveToRgbString(cssText.slice(i, j), ctx);
+    i = j;
+  }
+  return result;
+}
+
+function neutralizeUnsupportedColors(clonedDoc) {
+  const hasUnsupported = (text) => UNSUPPORTED_COLOR_FNS.some((n) => text.includes(`${n}(`));
+  const ctx = document.createElement("canvas").getContext("2d");
+  ctx.canvas.width = 1;
+  ctx.canvas.height = 1;
+  clonedDoc.querySelectorAll("style").forEach((styleEl) => {
+    if (hasUnsupported(styleEl.textContent)) styleEl.textContent = resolveModernColorFunctions(styleEl.textContent, ctx);
+  });
+  clonedDoc.querySelectorAll("[style]").forEach((el) => {
+    const attr = el.getAttribute("style") || "";
+    if (hasUnsupported(attr)) el.setAttribute("style", resolveModernColorFunctions(attr, ctx));
+  });
+}
+
 async function rasterizeElement(el, targetWidth) {
   const existingCanvas = el.querySelector(":scope > canvas");
   if (existingCanvas) return existingCanvas;
   const scale = Math.min(2, targetWidth / el.clientWidth || 1);
-  return window.html2canvas(el, { backgroundColor: "#ffffff", scale, useCORS: true });
+  return window.html2canvas(el, { backgroundColor: "#ffffff", scale, useCORS: true, onclone: neutralizeUnsupportedColors });
 }
 
 async function buildPages(pagesContainer, targetWidth, onStatus) {
