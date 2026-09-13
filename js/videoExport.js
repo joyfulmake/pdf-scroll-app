@@ -26,6 +26,7 @@ const THEMES = {
   midnight: { name: "Midnight", grad: ["#0b0e14", "#1f2a44"], slideBg: "#0b0e14", caption: "rgba(0, 0, 0, 0.65)", accent: "#5b8cff" },
   sunrise: { name: "Sunrise", grad: ["#ff7a59", "#ffb347"], slideBg: "#3a1f12", caption: "rgba(50, 24, 10, 0.6)", accent: "#ffb347" },
   mono: { name: "Mono", grad: ["#1c1c1c", "#585858"], slideBg: "#1c1c1c", caption: "rgba(0, 0, 0, 0.6)", accent: "#e5e5e5" },
+  cyberpunk: { name: "Cyberpunk", grad: ["#0b0f19", "#1a0b2e"], slideBg: "#0b0f19", caption: "rgba(5, 5, 15, 0.7)", accent: "#ff2e88" },
 };
 
 const ANIMATIONS = {
@@ -38,6 +39,17 @@ export { ASPECTS, THEMES, ANIMATIONS };
 
 function cleanText(text) {
   return (text || "").replace(/\s+/g, " ").trim();
+}
+
+// A "key" content unit worth lingering on: a real heading in the source document
+// (h1-h6), or — for PPTX, where a whole slide is one textBlock — a slide whose title
+// placeholder landed inside it. Works for any doc because it reads the actual markup
+// each loader already produces (headings for DOCX/HTML/MD, title <h2> for PPTX)
+// instead of relying on an external "is this important" classification step.
+function isKeywordBlock(el) {
+  if (!el) return false;
+  if (el.matches?.("h1, h2, h3, h4, h5, h6")) return true;
+  return !!el.querySelector?.(":scope > h1, :scope > h2, :scope > h3");
 }
 
 function wrapLines(ctx, text, maxWidth) {
@@ -202,9 +214,9 @@ function computeAtomicSegments(rendered, doc) {
     const units = blocksInside.length
       ? blocksInside.map((b) => {
           const r = b.el.getBoundingClientRect();
-          return { text: b.text, top: r.top - elRect.top, height: r.height || 1 };
+          return { text: b.text, top: r.top - elRect.top, height: r.height || 1, isKeyword: isKeywordBlock(b.el) };
         })
-      : [{ text: el.textContent || "", top: 0, height: elRect.height || 1 }];
+      : [{ text: el.textContent || "", top: 0, height: elRect.height || 1, isKeyword: false }];
     units.sort((a, b) => a.top - b.top);
 
     for (const u of units) {
@@ -226,6 +238,7 @@ function computeAtomicSegments(rendered, doc) {
         fracLeft: contentColumn.left,
         fracWidth: contentColumn.right - contentColumn.left,
         text: cleanText(u.text).slice(0, 240),
+        isKeyword: u.isKeyword,
       });
     }
     cumY += pageHeight;
@@ -242,10 +255,11 @@ function groupIntoSlides(segments, targetChunkHeight) {
     const currentHeight = current ? current.pageLocalEndY - current.pageLocalStartY : 0;
     if (!current || current.pageIndex !== seg.pageIndex || currentHeight >= targetChunkHeight * 0.9) {
       if (current) groups.push(current);
-      current = { pageIndex: seg.pageIndex, pageLocalStartY: seg.pageLocalStartY, pageLocalEndY: seg.pageLocalEndY, texts: [seg.text] };
+      current = { pageIndex: seg.pageIndex, pageLocalStartY: seg.pageLocalStartY, pageLocalEndY: seg.pageLocalEndY, texts: [seg.text], isKeyword: seg.isKeyword };
     } else {
       current.pageLocalEndY = seg.pageLocalEndY;
       current.texts.push(seg.text);
+      current.isKeyword = current.isKeyword || seg.isKeyword;
     }
   }
   if (current) groups.push(current);
@@ -261,11 +275,14 @@ function nativeCropForGroup(rendered, group) {
 }
 
 // Rough narration-pace estimate for how long to hold each slide before advancing.
-function dwellMsFor(text) {
-  return clamp((text.length / 18) * 1000, 2500, 8000);
+// A title/heading slide gets a small extra beat, same idea as the scroll-mode
+// keyword hold: important content deserves a moment longer than the base pace.
+function dwellMsFor(text, isKeyword = false) {
+  const base = clamp((text.length / 18) * 1000, 2500, 8000);
+  return isKeyword ? clamp(base + 800, 2500, 8000) : base;
 }
 
-function drawCaption(ctx, W, H, theme, text) {
+function drawCaption(ctx, W, H, theme, text, isKeyword = false) {
   if (!text) return;
   const barHeight = Math.round(H * 0.16);
   ctx.fillStyle = theme.caption;
@@ -273,11 +290,14 @@ function drawCaption(ctx, W, H, theme, text) {
   ctx.fillStyle = theme.accent;
   ctx.fillRect(0, H - barHeight, W, 3);
 
-  ctx.fillStyle = "#ffffff";
+  // Headings/titles render in the theme's accent color and bold weight — the same
+  // "make keywords pop" cue as regular captions, just driven by real document
+  // structure instead of a manually-flagged keyword list.
+  ctx.fillStyle = isKeyword ? theme.accent : "#ffffff";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   const fontSize = Math.round(W * 0.028);
-  ctx.font = `500 ${fontSize}px -apple-system, sans-serif`;
+  ctx.font = `${isKeyword ? 700 : 500} ${fontSize}px -apple-system, sans-serif`;
   const pad = W * 0.03;
   const lines = wrapLines(ctx, text, W - pad * 2).slice(0, 3);
   lines.forEach((line, i) => ctx.fillText(line, pad, H - barHeight + pad * 0.6 + i * (fontSize * 1.35)));
@@ -294,7 +314,7 @@ function drawCaption(ctx, W, H, theme, text) {
 function buildContentBands(segments) {
   const pad = 8;
   const sorted = segments
-    .map((s) => ({ start: Math.max(0, s.startY - pad), end: s.endY + pad, hLeft: s.fracLeft, hRight: clamp(s.fracLeft + s.fracWidth, 0, 1) }))
+    .map((s) => ({ start: Math.max(0, s.startY - pad), end: s.endY + pad, hLeft: s.fracLeft, hRight: clamp(s.fracLeft + s.fracWidth, 0, 1), isKeyword: s.isKeyword }))
     .sort((a, b) => a.start - b.start);
   const bands = [];
   for (const r of sorted) {
@@ -303,6 +323,7 @@ function buildContentBands(segments) {
       last.end = Math.max(last.end, r.end);
       last.hLeft = Math.min(last.hLeft, r.hLeft);
       last.hRight = Math.max(last.hRight, r.hRight);
+      last.isKeyword = last.isKeyword || r.isKeyword;
     } else {
       bands.push({ ...r });
     }
@@ -318,14 +339,20 @@ function buildContentBands(segments) {
 // spacing is left alone so continuous prose doesn't stutter on every line.
 const MIN_GAP_FOR_PAUSE = 60;
 
+// Reveal holds carry their own duration now instead of a single fixed constant: a
+// heading/title band gets a longer, more deliberate beat (mirrors "pause longer on
+// keywords") than an ordinary paragraph reveal, since it's the one moment a viewer
+// needs to actually register a new section starting.
 function contentRevealYs(bands) {
-  const ys = [];
+  const reveals = [];
   let prevEnd = 0;
   for (const b of bands) {
-    if (b.start - prevEnd >= MIN_GAP_FOR_PAUSE) ys.push(b.start);
+    if (b.start - prevEnd >= MIN_GAP_FOR_PAUSE) {
+      reveals.push({ y: b.start, holdMs: b.isKeyword ? KEYWORD_REVEAL_HOLD_MS : CONTENT_REVEAL_HOLD_MS });
+    }
     prevEnd = b.end;
   }
-  return ys;
+  return reveals;
 }
 
 // Content always scrolls at the caller's configured (readable) speed — never slowed
@@ -342,12 +369,12 @@ const HARD_MAX_DURATION_S = 300; // 5 min: absolute ceiling, even for very large
 const MAX_CONTENT_SPEEDUP = 2.5; // how much faster than configured pace content may be pushed to hit the soft target
 const GAP_SPEED_MULTIPLIER = 6; // how much faster than reading pace margins/whitespace move
 
-function estimateRawDurationS(bands, maxY, pauseCount, readSpeed) {
+function estimateRawDurationS(bands, maxY, reveals, readSpeed) {
   const contentHeight = bands.reduce((s, b) => s + (Math.min(b.end, maxY) - Math.min(b.start, maxY)), 0);
   const gapHeight = Math.max(0, maxY - contentHeight);
   const contentTime = readSpeed > 0 ? contentHeight / readSpeed : 0;
   const gapTime = readSpeed > 0 ? gapHeight / (readSpeed * GAP_SPEED_MULTIPLIER) : 0;
-  const pauseTime = (pauseCount * CONTENT_REVEAL_HOLD_MS) / 1000;
+  const pauseTime = reveals.reduce((s, r) => s + r.holdMs, 0) / 1000;
   return contentTime + gapTime + pauseTime;
 }
 
@@ -406,11 +433,12 @@ function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t,
   if (wantCaptions) {
     const focusY = srcY + srcH * 0.4;
     const seg = segments.find((s) => focusY >= s.startY && focusY < s.endY) || segments[segments.length - 1];
-    drawCaption(ctx, W, H, theme, seg?.text);
+    drawCaption(ctx, W, H, theme, seg?.text, seg?.isKeyword);
   }
 }
 
 const CONTENT_REVEAL_HOLD_MS = 500;
+const KEYWORD_REVEAL_HOLD_MS = 1600;
 // Time constants for easing the scroll speed and the crop/zoom toward their targets
 // instead of snapping — a soft ramp reads as deliberate, an instant jump reads as a
 // glitch. The crop eases more slowly than the speed does: a pan/zoom that settles in
@@ -423,7 +451,7 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
   const bands = buildContentBands(segments);
   const pendingReveals = contentRevealYs(bands);
 
-  const rawDuration = estimateRawDurationS(bands, maxY, pendingReveals.length, speed);
+  const rawDuration = estimateRawDurationS(bands, maxY, pendingReveals, speed);
   const targetDuration = targetDurationFor(rawDuration);
   const durationScale = rawDuration > 0 ? rawDuration / targetDuration : 1;
   const contentSpeed = speed * durationScale;
@@ -457,12 +485,14 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
     // Pause right as a blank stretch is about to give way to real content again — not
     // at a fixed pixel seam, which can sit well before the text if a page has a big top
     // margin. Redraws every frame throughout the hold (a static canvas produces no real
-    // captured video, per exportVideo's title card handling above).
-    if (pendingReveals.length && offsetY >= pendingReveals[0]) {
-      offsetY = Math.min(maxY, pendingReveals.shift());
+    // captured video, per exportVideo's title card handling above). Holds ahead of a
+    // heading run longer than an ordinary paragraph reveal (see contentRevealYs).
+    if (pendingReveals.length && offsetY >= pendingReveals[0].y) {
+      const reveal = pendingReveals.shift();
+      offsetY = Math.min(maxY, reveal.y);
       const holdStart = performance.now();
       let holdLastTick = holdStart;
-      while (performance.now() - holdStart < CONTENT_REVEAL_HOLD_MS) {
+      while (performance.now() - holdStart < reveal.holdMs) {
         if (isCancelled()) return;
         const holdNow = performance.now();
         easeCrop((holdNow - holdLastTick) / 1000);
@@ -525,10 +555,10 @@ function buildBlurredBackdrop(W, H, srcCanvas, srcY, srcH) {
 // ever squeezed once the deck as a whole would otherwise run past the target length.
 function scaleDwellTimes(groups) {
   const TRANSITION_MS = 450;
-  const natural = groups.reduce((s, g) => s + dwellMsFor(g.text), 0) + Math.max(0, groups.length - 1) * TRANSITION_MS;
+  const natural = groups.reduce((s, g) => s + dwellMsFor(g.text, g.isKeyword), 0) + Math.max(0, groups.length - 1) * TRANSITION_MS;
   const targetMs = targetDurationFor(natural / 1000) * 1000;
   const scale = natural > 0 ? targetMs / natural : 1;
-  return groups.map((g) => clamp(dwellMsFor(g.text) * scale, 800, 8000));
+  return groups.map((g) => clamp(dwellMsFor(g.text, g.isKeyword) * scale, 800, 8000));
 }
 
 async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions, onStatus, isCancelled }) {
@@ -554,7 +584,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
       ctx.fillRect(0, 0, W, H);
       ctx.drawImage(backdrop, 0, 0);
       drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme);
-      if (wantCaptions) drawCaption(ctx, W, H, theme, group.text);
+      if (wantCaptions) drawCaption(ctx, W, H, theme, group.text, group.isKeyword);
       await new Promise((r) => requestAnimationFrame(r));
     }
 
@@ -578,7 +608,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
       ctx.restore();
       drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme, 1 - t);
       drawContainFrame(ctx, W, H, nextCrop.srcCanvas, nextCrop.srcY, nextCrop.srcH, theme, t);
-      if (wantCaptions) drawCaption(ctx, W, H, theme, t < 0.5 ? group.text : nextGroup.text);
+      if (wantCaptions) drawCaption(ctx, W, H, theme, t < 0.5 ? group.text : nextGroup.text, t < 0.5 ? group.isKeyword : nextGroup.isKeyword);
       if (t >= 1) break;
       await new Promise((r) => requestAnimationFrame(r));
     }
