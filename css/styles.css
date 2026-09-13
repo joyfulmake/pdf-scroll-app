@@ -201,6 +201,18 @@ select:focus, input:focus, textarea:focus {
   outline-offset: 1px;
 }
 
+/* ---------- Footer ---------- */
+
+#app-footer {
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel-bg);
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+#app-footer strong { color: var(--text); }
+
 /* ---------- Layout ---------- */
 
 #layout {

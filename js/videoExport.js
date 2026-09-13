@@ -422,10 +422,11 @@ function cropTargetAt(y, bands) {
 }
 
 // A small, low-opacity corner credit — not a loud logo overlay, just enough that
-// someone watching a shared video knows what made it. A soft drop shadow keeps it
-// legible over both light and dark page content without needing per-theme colors.
+// someone watching a shared video knows what made it and how to try it themselves.
+// A soft drop shadow keeps it legible over both light and dark page content without
+// needing per-theme colors.
 function drawWatermark(ctx, W, H) {
-  const text = "pdf-scroll-app.pages.dev";
+  const text = "Try it free: pdf-scroll-app.pages.dev";
   const fontSize = Math.round(W * 0.016);
   ctx.save();
   ctx.font = `500 ${fontSize}px -apple-system, sans-serif`;
