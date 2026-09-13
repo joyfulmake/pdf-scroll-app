@@ -4,20 +4,20 @@
 
 A browser-based app that turns a document — PDF, Word (.docx), PowerPoint (.pptx), plain text/Markdown, or HTML — into a smooth scrolling "video-like" reading experience: auto-scroll playback, a real voice reading it back to you, highlight-to-AI explanations, AI summaries, freeform notes, a soft/gentle theme picker, and an export to an actual narrated video file for LinkedIn or any other platform.
 
-**Live**: [pdf-scroll-app.pages.dev](https://pdf-scroll-app.pages.dev) · [pdf-scroll-app.sriram-c76-254.workers.dev](https://pdf-scroll-app.sriram-c76-254.workers.dev) (see [ARCHITECTURE.md](ARCHITECTURE.md) for why there are two)
+**Live**: [pdf-scroll-app.pages.dev](https://pdf-scroll-app.pages.dev) — the app previously also auto-deployed to a second Workers URL; that target is being retired in favor of this single Pages deployment (see [ARCHITECTURE.md](ARCHITECTURE.md)).
 
-Your document is never uploaded anywhere — everything from parsing to rendering happens client-side in your browser. Only the AI features ("Ask AI" / "Summarize") make a network call, to this app's own server-side proxy — see below.
+Your document is never uploaded anywhere — everything from parsing to rendering happens client-side in your browser. The only network calls are to this app's own server-side proxy: Google sign-in (required to use the app at all — see below) and the AI features ("Ask AI" / "Summarize").
 
 ## Running it locally
 
-No build step for the frontend. Serve the folder over `http://` (module scripts and vendored assets won't load from a bare `file://` URL):
+The whole app now sits behind a mandatory Google sign-in gate (see [Sign-in & accounts](#sign-in--accounts) below), so a plain static file server can no longer get you past the front door — there's nothing at `/api/*` for it to call. Run the real local dev server instead, which serves both the frontend and the Pages Functions (`functions/api/**`):
 
 ```sh
-python3 -m http.server 8934
-# or: npm run serve
+cp .dev.vars.example .dev.vars   # fill in GOOGLE_CLIENT_ID/SECRET, or just TEST_AUTH_BYPASS_SECRET for local poking-around
+npm run dev                      # wrangler pages dev — needs `wrangler login` once
 ```
 
-Then open `http://localhost:8934/`. Everything works this way **except** "Ask AI" / "Summarize" — those need the Cloudflare Worker (see [Deploying](#deploying) below), since that's what runs the AI model. Locally you'll see those features fail gracefully with a clear error rather than pretend to work.
+Then open `http://localhost:8934/`. A plain `python3 -m http.server` (`npm run serve`) still starts, but only for eyeballing markup/CSS — every interactive feature is behind the sign-in gate, which has nothing to talk to on that server.
 
 ## Features
 
@@ -31,6 +31,14 @@ Then open `http://localhost:8934/`. Everything works this way **except** "Ask AI
 - **Resizable sidebar** — drag the handle on the sidebar's left edge; the width persists too.
 - **Export video** — renders the whole document into a downloadable `.webm` video (square/vertical/landscape), with your live microphone narration, an optional title card, scroll-synced burned-in captions, and an optional quiet background music bed. Three animation styles (smooth scroll, smooth scroll with a slow Ken Burns zoom, or slide-by-slide with crossfades) and four themes (Classic, Midnight, Sunrise, Mono). Scroll speed defaults to whatever you've currently set for on-screen reading. `.webm` is natively supported on LinkedIn and most social platforms.
 
+## Sign-in & accounts
+
+Using the app at all requires signing in with Google — one click, no password to create. This confirms who's reading; it doesn't change what the app can see, since documents still never leave your browser. A signed-in session lasts 90 days before you need to sign in again.
+
+Once an account is 90+ days old, a small dismissible banner appears mentioning premium features that are coming to the roadmap — dismissing it is permanent (stored against your account, not this browser, so it won't reappear on another device).
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how the OAuth flow, session cookie, and D1-backed user table are wired up.
+
 ## AI — free, no key required
 
 "Ask AI" and "Summarize" run on **Cloudflare Workers AI** (`@cf/meta/llama-3.3-70b-instruct-fp8-fast`), bound directly to the server-side code that serves this app. There is no API key to obtain, paste in, or manage — the model runs on Cloudflare's free tier and its credentials never exist in the browser at all, since there aren't any to leak. See [ARCHITECTURE.md](ARCHITECTURE.md) for how this is wired up and why it works identically on both deployment targets.
@@ -39,6 +47,7 @@ Then open `http://localhost:8934/`. Everything works this way **except** "Ask AI
 
 | Feature | Needs internet? | Persists after closing the tab? |
 |---|---|---|
+| Signing in | Yes (Google + this app's Worker, once) | Yes — 90-day session cookie |
 | Opening/scrolling/reading documents | No | No (reopen the file next time) |
 | Read Aloud (voice) | No | — |
 | Notes | No | No — **download before closing** |
@@ -58,17 +67,24 @@ js/
   scrollPlayer.js            Auto-scroll "video" playback
   voiceReader.js              Web Speech API read-aloud + highlighting
   aiClient.js                 Calls this app's own /api/ai/* endpoints
+  auth.js                      Sign-in gate + 90-day upgrade banner (js/app.js awaits this before anything else runs)
   notes.js                    Session-only notes panel
   theme.js                    Theme picker (localStorage-persisted)
   sidebarResize.js            Draggable sidebar width (localStorage-persisted)
   videoExport.js               Filmstrip build + canvas/MediaRecorder video export
 src/
-  worker.js                  Workers entry point: serves static assets, proxies /api/ai/*
-  aiHandlers.js                Shared AI prompt/handler logic (used by both deploy targets)
-functions/api/ai/            Cloudflare Pages Functions equivalent of src/worker.js's routes
+  worker.js                  Legacy Workers entry point — unused now the app is Pages-only (kept, not deleted)
+  aiHandlers.js                Shared AI prompt/handler logic
+  authHandlers.js               Shared Google OAuth + D1 session/user logic
+  authCookies.js                Cookie parsing/writing + token hashing helpers
+  db/schema.sql                 D1 schema: users, auth_sessions
+functions/api/
+  ai/                          Pages Functions: explain/summarize/combine — each requireAuth-gated
+  auth/                        Pages Functions: google/{start,callback}, me, logout, dismiss-upgrade-banner
 vendor/                     Vendored pdf.js, mammoth, JSZip, marked, html2canvas
                             (no CDN dependency — works fully offline once loaded)
-wrangler.jsonc               Workers config: static assets + AI binding
+wrangler.jsonc               Legacy Workers config — no longer relevant once the Workers target is retired
+.dev.vars.example            Template for local secrets (GOOGLE_CLIENT_ID/SECRET, TEST_AUTH_BYPASS_SECRET)
 test/smoke.mjs               Playwright smoke test (dev-only, not needed to use the app)
 ```
 
@@ -100,27 +116,30 @@ Empirically tested (not just assumed) on both **Chrome/Chromium** and **Firefox*
 
 ## Deploying
 
-This app runs on two Cloudflare deployment targets in parallel (see [ARCHITECTURE.md](ARCHITECTURE.md) for the full why):
-
 ```sh
-# Git-connected Worker (auto-deploys on push to main) — set up once via the
-# Cloudflare dashboard's "Connect to Git" flow; no manual command needed after that.
-
-# Direct-upload Pages project (redeploy manually after each change):
 wrangler pages deploy . --project-name=pdf-scroll-app --branch=main
 ```
 
-Both share the exact same static frontend and the exact same AI handler logic (`src/aiHandlers.js`), so they behave identically.
+One-time provisioning before sign-in works on a fresh deployment:
+
+1. `wrangler d1 create pdf-scroll-db`, then `wrangler d1 execute pdf-scroll-db --remote --file=src/db/schema.sql`.
+2. Cloudflare dashboard → pdf-scroll-app (Pages) → Settings → Functions → D1 database bindings → bind `DB` to `pdf-scroll-db`.
+3. Google Cloud Console → new OAuth client → redirect URI `https://pdf-scroll-app.pages.dev/api/auth/google/callback` → add yourself as a test user while the consent screen is in "Testing" mode.
+4. `wrangler pages secret put GOOGLE_CLIENT_ID --project-name=pdf-scroll-app` and the same for `GOOGLE_CLIENT_SECRET`.
+
+This app previously also auto-deployed to a second Workers URL (see [ARCHITECTURE.md](ARCHITECTURE.md) for why that existed) — that Git-connected Workers project should be disconnected in the Cloudflare dashboard so it stops silently drifting from this (now auth-gated) Pages deployment. `src/worker.js`/`wrangler.jsonc` are left in the repo unused rather than deleted, in case that target is ever wanted again.
 
 ## Dev-only test suite
 
-`test/smoke.mjs` drives the app with Playwright against a real (system) Chromium to catch regressions — file loading for all six formats, auto-scroll, voice reader state, notes/theme/sidebar persistence, the highlight toolbar, sanitization (including a reproduction of the real dark-box/white-text bug this app once shipped), and a full video export in three animation modes. It's not part of the app itself.
+`test/smoke.mjs` drives the app with Playwright against a real (system) Chromium to catch regressions — file loading for all six formats, auto-scroll, voice reader state, notes/theme/sidebar persistence, the highlight toolbar, sanitization (including a reproduction of the real dark-box/white-text bug this app once shipped), a full video export in three animation modes, and the AI endpoints. It's not part of the app itself.
+
+Every request in the suite carries a header that bypasses the sign-in gate (see `.dev.vars.example`) — driving a real Google login from Playwright isn't practical, and Google actively resists automated sign-in attempts. **`TEST_AUTH_BYPASS_SECRET` must never be set as a real deployed Pages secret** — it only belongs in a local `.dev.vars`, and if it's absent from `env` entirely (the normal production case) the bypass code path in `src/authHandlers.js` can't be reached no matter what header a request sends.
 
 ```sh
-npm install       # installs playwright-core only
-npm run serve     # in one terminal
-npm test          # in another — AI-dependent checks skip gracefully against the
-                  # local static server and only run meaningfully against a deployed URL
+npm install                     # installs playwright-core only
+cp .dev.vars.example .dev.vars  # set TEST_AUTH_BYPASS_SECRET to any random string
+npm run dev                     # in one terminal — wrangler pages dev, not the plain static server
+TEST_AUTH_BYPASS_SECRET=<same value as .dev.vars> npm test   # in another
 ```
 
 ## Regenerating the demo GIF / OG image

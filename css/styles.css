@@ -476,6 +476,26 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
 .ai-info-card strong { font-size: 20px; font-weight: 600; }
 .ai-info-card p { margin: 6px 0 0; font-size: 16px !important; font-weight: 500; }
 
+/* Same visual language as .ai-info-card above (icon + strong + muted paragraph, same
+   gradient/border treatment) but a distinct class/selector on purpose — this one is
+   docked full-width under #topbar rather than living inside #panel-settings, and
+   keeping it out of the .ai-info-card selector namespace avoids colliding with
+   anything that specifically queries that settings-panel card. */
+.upgrade-banner-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 16px 0;
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--panel-bg)), color-mix(in srgb, var(--accent-2) 8%, var(--panel-bg)));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+}
+.upgrade-banner-card .banner-icon { font-size: 20px; line-height: 1.3; }
+.upgrade-banner-card strong { font-size: 14px; font-weight: 600; }
+.upgrade-banner-card p { margin: 4px 0 0; font-size: 13px; font-weight: 500; }
+.upgrade-banner-card button.icon-btn { margin-left: auto; }
+
 fieldset {
   border: 1px solid var(--border);
   border-radius: var(--radius);

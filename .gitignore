@@ -4,3 +4,4 @@ package-lock.json
 .wrangler/
 notes
 "error html.jpg"
+.dev.vars

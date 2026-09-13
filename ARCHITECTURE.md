@@ -8,16 +8,20 @@ This document is for anyone reviewing or extending the codebase — it covers ho
 ┌─────────────────────────────── Browser (client-side app) ───────────────────────────────┐
 │  index.html + js/*  — no build step, ES modules loaded directly                          │
 │                                                                                            │
+│  js/auth.js: AuthGate.requireSession() — app.js awaits this before anything else runs    │
+│                                     │                                                      │
 │  loaders/*.js  →  { title, kind, textBlocks }  →  scrollPlayer / voiceReader /            │
 │  (one per format)     (a uniform contract          aiClient / videoExport                │
 │                        every downstream feature     all consume this shape,               │
 │                        depends on)                  regardless of source format)          │
 └───────────────────────────────────┬───────────────────────────────────────────────────────┘
-                                     │  POST /api/ai/{explain,summarize,combine}
+                                     │  GET  /api/auth/google/{start,callback}, /api/auth/me
+                                     │  POST /api/auth/logout, /api/auth/dismiss-upgrade-banner
+                                     │  POST /api/ai/{explain,summarize,combine}  (requireAuth-gated)
                                      ▼
-┌──────────────────────── Cloudflare (server-side, two parallel targets) ──────────────────┐
-│  src/worker.js (Workers)          OR         functions/api/ai/*.js (Pages Functions)      │
-│  both import the same src/aiHandlers.js — identical prompts/logic either way              │
+┌────────────────────────────── Cloudflare Pages Functions ────────────────────────────────┐
+│  functions/api/auth/*.js  →  src/authHandlers.js + src/authCookies.js  →  D1 (env.DB)     │
+│  functions/api/ai/*.js    →  src/aiHandlers.js (requireAuth from authHandlers.js first)   │
 │                                     │                                                      │
 │                                     ▼                                                      │
 │                          Workers AI binding (env.AI)                                       │
@@ -26,18 +30,29 @@ This document is for anyone reviewing or extending the codebase — it covers ho
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Everything left of the network call is a static, client-only SPA — no framework, no bundler, no build step. Everything right of it is ~120 lines of Cloudflare-specific glue around one shared handler module.
+Everything left of the network calls is a static, client-only SPA — no framework, no bundler, no build step. Everything right of them is Cloudflare-specific glue around a small number of shared handler modules, all served from one Pages project.
 
-## Why two deployment targets
+## Why there used to be two deployment targets
 
-This wasn't planned up front — it's the result of how Cloudflare's dashboard flows actually behave, worth understanding before touching either config:
+This app used to run on two Cloudflare deployment targets in parallel — worth understanding since the retired one's files (`src/worker.js`, `wrangler.jsonc`) are still in the repo, unused:
 
 1. The project was first deployed via `wrangler pages deploy` (direct upload) — simplest path, no git integration needed.
 2. Connecting the dashboard's "Connect to Git" flow for auto-deploy-on-push created a **Workers** project (deploy command `npx wrangler deploy`), not a classic Pages project — Cloudflare's newer unified model serves static assets from a Worker via an `assets` binding in `wrangler.jsonc`, with `main: src/worker.js` handling anything else (here, `/api/ai/*`).
 3. Workers and Pages projects live in **separate name registries** in the same account, and Workers-issued `*.workers.dev` URLs always include an account-wide subdomain (`pdf-scroll-app.<account-subdomain>.workers.dev`) that can't be shortened per-project — whereas Pages projects get a clean `<project-name>.pages.dev` with no account-specific segment. A second, plain Pages project was added specifically to get that cleaner URL.
-4. Since Pages doesn't read `wrangler.jsonc`'s `main`/`ai` fields the way Workers does, the AI proxy had to be reimplemented for Pages using its own convention — file-based routing under `functions/`. Rather than duplicate the prompts/model logic, both entry points import the same `src/aiHandlers.js`, so a change to one always applies to both. The AI binding itself is attached to the Pages project via the Cloudflare API (`PATCH .../pages/projects/{name}` with `deployment_configs.production.ai_bindings`) since there's no dashboard toggle or wrangler CLI flag for it at time of writing.
+4. Since Pages doesn't read `wrangler.jsonc`'s `main`/`ai` fields the way Workers does, the AI proxy had to be reimplemented for Pages using its own convention — file-based routing under `functions/`. Rather than duplicate the prompts/model logic, both entry points imported the same `src/aiHandlers.js`. The AI binding itself is attached to the Pages project via the Cloudflare API (`PATCH .../pages/projects/{name}` with `deployment_configs.production.ai_bindings`) since there's no dashboard toggle or wrangler CLI flag for it at time of writing.
 
-Net effect: two URLs, functionally identical, both auto-verified by the same test suite before anything ships (see [Testing](#testing) below). `.assetsignore` keeps `src/`, `functions/`, and `wrangler.jsonc` out of the deployed *static assets* themselves — they're deployment inputs, not app files.
+**Why it's down to one now**: adding Google sign-in meant wiring session cookies, D1, and OAuth secrets into whichever targets stay live — doable on both, but it roughly doubles every provisioning step and adds a real failure mode (one target's auth silently breaking while the other keeps working, worse than the old "one target is a version behind" drift). Since the Pages URL was always the one actually used, the Workers target is being retired rather than carried forward. `.assetsignore` keeps `src/`, `functions/`, and `wrangler.jsonc` out of the deployed *static assets* themselves — they're deployment inputs, not app files.
+
+## Auth
+
+Google OAuth, replicated from the same pattern already proven in a sibling project (`learning-strategist-app`), landed entirely as Pages Functions + two shared `src/` modules — no new runtime dependency, no JWT library:
+
+- **`src/authHandlers.js`**: `buildGoogleAuthUrl`, `exchangeGoogleCode` (exchanges the code for tokens, then verifies the `id_token` via Google's own `GET /tokeninfo` endpoint — which validates the signature server-side and hands back verified claims — rather than implementing JWK-based JWT verification by hand), D1 user/session read/write functions, and `requireAuth(request, env)`, called explicitly at the top of every gated route (no middleware framework, same manual-dispatch style as the rest of this app's routing).
+- **`src/authCookies.js`**: cookie parsing/writing (a short-lived CSRF `state` cookie during the OAuth redirect, the long-lived session cookie) and `sha256Hex`/`randomToken`.
+- **Session** = an opaque random token in an `HttpOnly; Secure; SameSite=Lax` cookie, 90 days. Only its SHA-256 hash is stored in D1's `auth_sessions` table — the raw token never touches the database, so a DB leak alone can't be replayed as a live session.
+- **`users.created_at`** (a `Date.now()` ms epoch, not a SQL timestamp) is the sole input to the 90-day upgrade-banner gate, computed server-side in `authUserPublicShape()` so the frontend never does its own date math and can't drift from the server's clock. `upgrade_banner_dismissed_at` lives on the same row (not the session), so a dismissal survives logout/login and follows the account across devices.
+- **Client-side gate** (`js/auth.js`'s `AuthGate`): `app.js` does a top-level `await authGate.requireSession()` before instantiating any other feature. Unauthenticated, the promise never resolves on that page load — the overlay shows and nothing else ever wires up its listeners. The only way past it is the OAuth redirect round-trip, which reloads the page. This is a real barrier (no feature's event listeners exist to call) but not a server-enforced one — parsing/rendering has no server round-trip to gate at all, so a sufficiently determined user could bypass it via devtools. The one place gating is actually server-enforced is the AI endpoints (`functions/api/ai/*.js`, via `requireAuth`), since that's the only place real work/cost happens.
+- **Test-only bypass**: `requireAuth` short-circuits to a fixed fake user if a request's `X-Test-Auth-Bypass` header matches `env.TEST_AUTH_BYPASS_SECRET` — driving a real Google login from Playwright isn't practical. That env var must only ever exist in a local `.dev.vars` (see `.dev.vars.example`), never as a real deployed Pages secret; if it's simply absent from `env` (the normal production case), the branch checking it can never be reached.
 
 ## The loader contract
 

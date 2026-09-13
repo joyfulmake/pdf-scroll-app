@@ -11,8 +11,21 @@ import { SidebarResizer } from "./sidebarResize.js";
 import { explainSelection, summarizeText } from "./aiClient.js";
 import { exportVideo, checkVideoExportSupport } from "./videoExport.js";
 import { showToast } from "./utils.js";
+import { AuthGate } from "./auth.js";
 
 const $ = (id) => document.getElementById(id);
+
+// Blocks the rest of this module's init (every feature below) until a session is
+// confirmed — see AuthGate.requireSession(). Loaded as type="module", so top-level
+// await is available with no wrapper function needed.
+const authGate = new AuthGate({
+  overlay: $("auth-gate"),
+  banner: $("upgrade-banner"),
+  bannerDismissBtn: $("upgrade-banner-dismiss"),
+  accountBtn: $("account-btn"),
+  accountEmail: $("account-email"),
+});
+await authGate.requireSession();
 
 const readerPane = $("reader-pane");
 const dropZone = $("drop-zone");

@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "serve": "python3 -m http.server 8934",
+    "dev": "wrangler pages dev . --ai=AI --port=8934 --compatibility-date=2025-01-01",
     "test": "node test/smoke.mjs"
   },
   "license": "ISC",

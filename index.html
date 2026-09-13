@@ -66,7 +66,18 @@
     <button id="export-video-btn" class="btn icon-btn" title="Export video" hidden>🎬</button>
     <button id="tab-notes-btn" class="btn icon-btn" title="Notes">📝</button>
     <button id="tab-settings-btn" class="btn icon-btn" title="Settings">⚙️</button>
+    <span id="account-email" class="muted small"></span>
+    <button id="account-btn" class="btn icon-btn" title="Sign out">🚪</button>
   </header>
+
+  <div id="upgrade-banner" class="upgrade-banner-card" hidden>
+    <span class="banner-icon">🌟</span>
+    <div>
+      <strong>Enjoying PDF Scroll Reader?</strong>
+      <p class="muted small">You've been reading with us for a few months now — premium features are on the way.</p>
+    </div>
+    <button id="upgrade-banner-dismiss" class="btn icon-btn" title="Dismiss">✕</button>
+  </div>
 
   <main id="layout">
 
@@ -217,6 +228,14 @@
   </main>
 
   <div id="toast" hidden></div>
+
+  <div id="auth-gate" class="modal-overlay" hidden>
+    <div class="modal">
+      <h2>📖 Sign in to continue</h2>
+      <p class="muted small">Free, one click — no password to create. Your notes and documents stay in this browser; signing in just confirms who's reading.</p>
+      <a id="auth-google-btn" class="btn primary" href="/api/auth/google/start">Sign in with Google</a>
+    </div>
+  </div>
 
   <div id="export-modal" class="modal-overlay" hidden>
     <div class="modal">

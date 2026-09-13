@@ -3,8 +3,21 @@ import { chromium, firefox } from "playwright-core";
 const SAMPLE_PDF = "/usr/share/doc/fonts-lmodern/lm-info.pdf";
 const SAMPLE_TXT = "/tmp/sample.txt";
 const BASE_URL = "http://localhost:8934";
-const isLocalStaticServer = BASE_URL.includes("localhost");
 const BROWSER_NAME = process.env.BROWSER || "chromium"; // "chromium" or "firefox"
+
+// The whole app now sits behind a mandatory Google sign-in gate (see js/auth.js).
+// Driving a real Google login from Playwright is impractical (Google actively
+// resists automated sign-in), so every request in this suite instead carries the
+// test-only bypass header that src/authHandlers.js's requireAuth() checks for —
+// see .dev.vars.example. Run this suite against `npm run dev` (wrangler pages dev),
+// not `npm run serve` (plain static server, has no /api/* routes at all and can
+// never pass the gate).
+const TEST_AUTH_BYPASS_SECRET = process.env.TEST_AUTH_BYPASS_SECRET;
+if (!TEST_AUTH_BYPASS_SECRET) {
+  console.error("TEST_AUTH_BYPASS_SECRET is not set — every test would dead-end at the sign-in gate.");
+  console.error("Set the same value in .dev.vars (see .dev.vars.example) and export it before running: TEST_AUTH_BYPASS_SECRET=... npm test");
+  process.exit(1);
+}
 
 let browser, contextOptions;
 if (BROWSER_NAME === "firefox") {
@@ -23,6 +36,9 @@ if (BROWSER_NAME === "firefox") {
   });
   contextOptions = { permissions: ["microphone"] };
 }
+// Applies to every request this context makes, including fetch() calls page script
+// itself issues (e.g. js/auth.js's /api/auth/me check) — not just top-level navigation.
+contextOptions.extraHTTPHeaders = { "X-Test-Auth-Bypass": TEST_AUTH_BYPASS_SECRET };
 const context = await browser.newContext(contextOptions);
 const page = await context.newPage();
 
@@ -66,7 +82,7 @@ async function assertActuallyHidden(selector) {
 }
 
 await step("Initially-hidden elements are actually not rendered (not just attribute-hidden)", async () => {
-  for (const sel of ["#scroll-controls", "#voice-controls", "#progress-wrap", "#export-video-btn", "#selection-toolbar", "#side-panel", "#export-modal"]) {
+  for (const sel of ["#scroll-controls", "#voice-controls", "#progress-wrap", "#export-video-btn", "#selection-toolbar", "#side-panel", "#export-modal", "#auth-gate", "#upgrade-banner"]) {
     await assertActuallyHidden(sel);
   }
 });
@@ -276,10 +292,6 @@ await step("Read-selection button speaks without crashing", async () => {
 });
 
 await step("Ask AI returns a real answer from the server-side model", async () => {
-  if (isLocalStaticServer) {
-    console.log("  SKIP (local static file server has no /api/ai/* routes — only the deployed Worker does)");
-    return;
-  }
   await page.reload();
   await page.waitForTimeout(400);
   const fileInput = await page.$("#file-input");
@@ -303,10 +315,6 @@ await step("Ask AI returns a real answer from the server-side model", async () =
 });
 
 await step("Summarize returns a real summary from the server-side model", async () => {
-  if (isLocalStaticServer) {
-    console.log("  SKIP (local static file server has no /api/ai/* routes — only the deployed Worker does)");
-    return;
-  }
   await page.selectOption("#summarize-scope", "document");
   await page.click("#summarize-btn", { timeout: 4000 });
   await page.waitForFunction(

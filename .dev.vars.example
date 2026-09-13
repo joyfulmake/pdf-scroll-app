@@ -1,0 +1,13 @@
+# Copy to .dev.vars (gitignored) for `wrangler pages dev` local development/testing.
+# Never set these as real deployed Pages secrets except GOOGLE_CLIENT_ID/SECRET.
+
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Lets test/smoke.mjs (and only test/smoke.mjs) inject a fake signed-in session
+# instead of driving a real Google login. Set to any random string locally.
+# MUST NEVER be set via `wrangler pages secret put` on the real deployment — if this
+# var is simply absent from env (the normal production case), the bypass path in
+# src/authHandlers.js's requireAuth() can never be reached, regardless of what header
+# a request sends.
+TEST_AUTH_BYPASS_SECRET=
