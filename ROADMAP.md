@@ -2,23 +2,23 @@
 
 Ideas for what's next — not commitments, not scheduled. The in-app upgrade banner (shown 90 days after signup) points here.
 
-## Buildable now (existing free Workers AI binding, no new infra)
+## Shipped
 
-### Contextual theme & pacing suggestion
+### Contextual theme & pacing suggestion ✅
 
-Instead of a fixed theme dropdown, send the document's extracted text to Workers AI and get back a suggested export theme + reading speed that fits the content's tone — still overridable by the user, not forced. Cheapest of all these to build: reuses the exact `summarize`/`explain` request pattern already in `src/aiHandlers.js`.
+The export modal's theme field has a "✨ Suggest" button — sends the document's text to Workers AI (`src/aiHandlers.js`'s `suggestTheme`), applies the suggested theme + reading speed directly, still fully overridable afterward.
 
-### Auto-generated chapter markers
+### Auto-generated chapter markers ✅
 
-For longer documents, reuse the heading-detection logic already added for the video export's keyword pauses (`js/videoExport.js`'s `isKeywordBlock`) to produce a YouTube-style timestamped chapter list in the video description, or an in-app jump-to-section list. No AI call needed — pure document structure already being detected.
+Scroll and slide-by-slide exports now show a timestamped chapter list (`MM:SS  Heading`) after rendering, computed analytically from the same heading-detection and speed model the export animation itself uses (`js/videoExport.js`) — no AI call needed. Copyable, e.g. for a YouTube description.
 
-### Study companion: auto-quiz/flashcards
+### Study companion: auto-quiz/flashcards ✅
 
-Generate 3-5 quick questions from the document via Workers AI, saveable to Notes. Turns passive reading into active studying — fits the app's "personal scrolling" positioning directly.
+"🧠 Quiz me" in the Notes/AI panel generates 5 short Q/A pairs via Workers AI (`src/aiHandlers.js`'s `quiz`), through the same output/save/read-back pipeline every other AI result already uses.
 
-### Smart highlight reel
+### Smart highlight reel ✅
 
-AI picks the most important few sentences and cuts a short 30-60s teaser video, separate from the full narrated one — built for sharing, pairs naturally with the video watermark's growth loop.
+"Highlight reel (AI-picked, ~20-30s)" is a 4th export animation mode — Workers AI picks 4-6 key sentences (`pickHighlights`), matched back to the document's own rendered pages and played through the existing slide-crossfade pipeline.
 
 ## Needs new infrastructure (bring-your-own-key, or storage/sharing)
 

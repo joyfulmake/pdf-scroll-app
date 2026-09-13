@@ -63,3 +63,31 @@ export async function summarizeText(fullText, { title, onProgress } = {}) {
   onProgress?.(chunks.length + 1, chunks.length + 1);
   return callApi("/api/ai/combine", { summaries: partial, title });
 }
+
+const VALID_THEMES = ["classic", "midnight", "sunrise", "mono", "cyberpunk"];
+const PACE_TO_SPEED = { slow: 25, medium: 60, fast: 120 };
+
+// Parsed leniently here (not server-side) so a slightly-off model response — extra
+// words, wrong case, a missing line — never throws; it just falls back to sane
+// defaults instead of breaking the export flow over a malformed AI response.
+export async function suggestTheme(text, { title } = {}) {
+  const raw = await callApi("/api/ai/suggest-theme", { text: text.slice(0, 8000), title });
+  const themeMatch = raw.match(/THEME:\s*(\w+)/i)?.[1]?.toLowerCase();
+  const paceMatch = raw.match(/PACE:\s*(\w+)/i)?.[1]?.toLowerCase();
+  const theme = VALID_THEMES.includes(themeMatch) ? themeMatch : "classic";
+  const pace = PACE_TO_SPEED[paceMatch] ? paceMatch : "medium";
+  return { theme, pace, speed: PACE_TO_SPEED[pace] };
+}
+
+export async function generateQuiz(fullText, { title } = {}) {
+  return callApi("/api/ai/quiz", { text: fullText, title });
+}
+
+export async function pickHighlightSentences(fullText, { title } = {}) {
+  const raw = await callApi("/api/ai/highlights", { text: fullText, title });
+  return raw
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+}

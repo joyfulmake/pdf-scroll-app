@@ -81,6 +81,14 @@ async function assertActuallyHidden(selector) {
   if (isVisible) throw new Error(`${selector} has [hidden] set but is still visibly rendered`);
 }
 
+// A transient failure (e.g. a flaky network call) partway through one export-modal
+// test can leave the modal open, which then intercepts every click in every test that
+// follows — cascading one real failure into many unrelated ones. Each export-modal
+// test starts by force-closing it, so a failure stays contained to its own test.
+async function closeExportModalIfOpen() {
+  await page.evaluate(() => { document.getElementById("export-modal").hidden = true; });
+}
+
 await step("Initially-hidden elements are actually not rendered (not just attribute-hidden)", async () => {
   for (const sel of ["#scroll-controls", "#voice-controls", "#progress-wrap", "#export-video-btn", "#selection-toolbar", "#side-panel", "#export-modal", "#auth-gate", "#upgrade-banner"]) {
     await assertActuallyHidden(sel);
@@ -511,6 +519,100 @@ await step("Video export with mic narration (real connected audio source) is als
     throw new Error(`exported file with mic enabled is only ${videoInfo.byteLength} bytes`);
   }
   await page.click("#export-close-btn", { timeout: 4000 });
+});
+
+await step("Quiz me generates real Q/A into #ai-output and enables save/read", async () => {
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample.txt");
+  await page.waitForFunction(() => !document.getElementById("scroll-controls").hidden, { timeout: 20000 });
+  await page.click("#tab-notes-btn", { timeout: 4000 });
+
+  const disabled = await page.$eval("#quiz-btn", (el) => el.disabled);
+  if (disabled) throw new Error("quiz button should be enabled once a doc is loaded");
+  await page.click("#quiz-btn", { timeout: 4000 });
+  await page.waitForFunction(() => document.getElementById("ai-output").textContent.trim().length > 10, { timeout: 20000 });
+  const saveDisabled = await page.$eval("#ai-save-btn", (el) => el.disabled);
+  if (saveDisabled) throw new Error("save-to-notes should be enabled after a quiz result");
+});
+
+await step("Theme-suggest button applies a valid theme+pace and shows a note", async () => {
+  await closeExportModalIfOpen();
+  await page.click("#export-video-btn", { timeout: 4000 });
+  await page.click("#theme-suggest-btn", { timeout: 4000 });
+  await page.waitForFunction(() => !document.getElementById("theme-suggestion-note").hidden, { timeout: 20000 });
+  const VALID_THEMES = ["classic", "midnight", "sunrise", "mono", "cyberpunk"];
+  const themeValue = await page.$eval("#export-theme", (el) => el.value);
+  if (!VALID_THEMES.includes(themeValue)) throw new Error(`AI suggested an invalid theme key: ${themeValue}`);
+  const noteText = await page.$eval("#theme-suggestion-note", (el) => el.textContent);
+  if (!noteText.trim()) throw new Error("suggestion note is empty");
+  await page.click("#export-cancel-btn", { timeout: 4000 });
+});
+
+await step("Scroll-mode export of a doc with real headings shows ascending MM:SS chapters", async () => {
+  await closeExportModalIfOpen();
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample-chapters.md");
+  await page.waitForFunction(() => !document.getElementById("scroll-controls").hidden, { timeout: 20000 });
+
+  await page.click("#export-video-btn", { timeout: 4000 });
+  await page.selectOption("#export-animation", "scroll");
+  await page.uncheck("#export-mic");
+  await page.fill("#export-speed", "80");
+  await page.click("#export-start-btn", { timeout: 4000 });
+  await page.waitForSelector("#export-result:not([hidden])", { timeout: 40000 });
+
+  const chaptersHidden = await page.$eval("#export-chapters", (el) => el.hidden);
+  if (chaptersHidden) throw new Error("expected chapters for a doc with real h1/h2 headings, got none");
+  const chaptersText = await page.$eval("#export-chapters-text", (el) => el.textContent);
+  const lines = chaptersText.trim().split("\n").filter(Boolean);
+  const times = lines.map((l) => {
+    const [m, s] = l.split(/\s+/)[0].split(":").map(Number);
+    return m * 60 + s;
+  });
+  for (let i = 1; i < times.length; i++) {
+    if (times[i] < times[i - 1]) throw new Error(`chapter timestamps not in ascending order: ${chaptersText}`);
+  }
+  await page.click("#export-close-btn", { timeout: 4000 });
+});
+
+// The highlight reel's AI-picked sentences are mocked here (rather than a real model
+// call, unlike the tests above) because this test's job is to verify the deterministic
+// client-side pipeline — matching sentences back to segments, building groups, hiding
+// the speed field, producing a real short video — not whether the model followed the
+// "copy verbatim" instruction perfectly on any given run.
+await step("Highlight-reel export mode hides the speed field and produces a real, shorter video", async () => {
+  await closeExportModalIfOpen();
+  await context.route("**/api/ai/highlights", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ text: "This is the opening section with some introductory prose that goes on for a little while to give the scroll something to move through before the next heading appears." }),
+    })
+  );
+  const fileInput = await page.$("#file-input");
+  await fileInput.setInputFiles("/tmp/sample-chapters.md");
+  await page.waitForFunction(() => !document.getElementById("scroll-controls").hidden, { timeout: 20000 });
+
+  await page.click("#export-video-btn", { timeout: 4000 });
+  await page.selectOption("#export-animation", "highlights");
+  const speedHidden = await page.$eval("#export-speed-field", (el) => el.hidden);
+  if (!speedHidden) throw new Error("speed field should be hidden in highlights mode");
+  await page.uncheck("#export-mic");
+  await page.click("#export-start-btn", { timeout: 4000 });
+  await page.waitForSelector("#export-result:not([hidden])", { timeout: 40000 });
+
+  const videoInfo = await page.$eval("#export-preview-video", async (el) => {
+    const res = await fetch(el.src);
+    const buf = await res.arrayBuffer();
+    return { byteLength: buf.byteLength };
+  });
+  if (videoInfo.byteLength < MIN_VALID_VIDEO_BYTES) {
+    throw new Error(`highlight reel is only ${videoInfo.byteLength} bytes — looks broken`);
+  }
+  const chaptersHidden = await page.$eval("#export-chapters", (el) => el.hidden);
+  if (!chaptersHidden) throw new Error("highlight reel shouldn't show its own chapters block");
+  await page.click("#export-close-btn", { timeout: 4000 });
+  await context.unroute("**/api/ai/highlights");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

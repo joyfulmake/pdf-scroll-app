@@ -36,3 +36,27 @@ export async function combine(env, { summaries, title }) {
   const prompt = `Here are bullet-point summaries of consecutive sections of a document${title ? ` ("${title}")` : ""}. Combine them into one cohesive summary for the reader: a short overview paragraph, then the main takeaways as bullet points, removing redundancy between sections.\n\n${summaries.map((s, i) => `Section ${i + 1}:\n${clip(s)}`).join("\n\n")}`;
   return runModel(env, prompt, 900);
 }
+
+// Returns a raw two-line "THEME: x\nPACE: y" string — parsed leniently on the client
+// (js/aiClient.js) rather than here, so a slightly-off model response never throws or
+// breaks the export flow; it just falls back to a default theme/pace client-side.
+export async function suggestTheme(env, { text, title }) {
+  if (!text?.trim()) throw new Error("Nothing to analyze.");
+  const prompt = `You're picking a visual theme and pacing for a short scrolling video reading of a document${title ? ` ("${title}")` : ""}. Available themes: classic (calm purple), midnight (dark, minimal, serious), sunrise (warm, energetic, upbeat), mono (grayscale, corporate/formal), cyberpunk (neon, high-energy, bold). Available paces: slow, medium, fast.\n\nBased on this document's actual content and tone, respond with EXACTLY two lines and nothing else — no explanation:\nTHEME: <one of classic, midnight, sunrise, mono, cyberpunk>\nPACE: <one of slow, medium, fast>\n\nDocument:\n"""${clip(text)}"""`;
+  return runModel(env, prompt, 20);
+}
+
+export async function quiz(env, { text, title }) {
+  if (!text?.trim()) throw new Error("Nothing to quiz on.");
+  const prompt = `Write 5 short quiz questions (with answers) testing understanding of the key points in this document${title ? ` ("${title}")` : ""}. Format each pair exactly as:\nQ: <question>\nA: <answer>\nwith a blank line between pairs. No intro, no numbering, no other commentary.\n\n"""${clip(text)}"""`;
+  return runModel(env, prompt, 700);
+}
+
+// Asks for sentences copied VERBATIM (not paraphrased) — the client matches these
+// back to the document's own rendered segments by substring, so wording has to
+// actually match the source or the highlight reel can't find where to crop from.
+export async function pickHighlights(env, { text, title }) {
+  if (!text?.trim()) throw new Error("Nothing to pick highlights from.");
+  const prompt = `Pick the 4 to 6 most important or interesting sentences from this document${title ? ` ("${title}")` : ""} — the ones that would make the best short highlight reel. Copy each sentence EXACTLY as written in the source, word for word, do not paraphrase or shorten it. One sentence per line, no numbering, no commentary, nothing else.\n\n"""${clip(text)}"""`;
+  return runModel(env, prompt, 400);
+}

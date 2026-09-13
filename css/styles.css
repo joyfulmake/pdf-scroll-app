@@ -472,8 +472,10 @@ body.sidebar-resizing { cursor: col-resize; user-select: none; }
   overflow-y: auto;
   min-height: 40px;
 }
-.ai-actions, .summarize-row { display: flex; gap: 8px; align-items: center; }
+.ai-actions, .summarize-row, .quiz-row { display: flex; gap: 8px; align-items: center; }
 .summarize-row select { flex: 1; }
+.theme-suggest-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#export-chapters { margin-top: 12px; }
 
 .ai-info-card {
   display: flex;

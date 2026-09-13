@@ -8,7 +8,7 @@ import { VoiceReader } from "./voiceReader.js";
 import { NotesPanel } from "./notes.js";
 import { ThemeSwitcher } from "./theme.js";
 import { SidebarResizer } from "./sidebarResize.js";
-import { explainSelection, summarizeText } from "./aiClient.js";
+import { explainSelection, summarizeText, generateQuiz, suggestTheme, pickHighlightSentences } from "./aiClient.js";
 import { exportVideo, checkVideoExportSupport } from "./videoExport.js";
 import { showToast } from "./utils.js";
 import { AuthGate } from "./auth.js";
@@ -102,6 +102,7 @@ function resetReader() {
   progressWrap.hidden = true;
   exportVideoBtn.hidden = true;
   $("summarize-btn").disabled = true;
+  $("quiz-btn").disabled = true;
   setAiOutput("", "");
   aiStatus.textContent = "";
 }
@@ -116,6 +117,7 @@ function onDocLoaded(doc, fallbackTitle) {
   progressWrap.hidden = false;
   exportVideoBtn.hidden = false;
   $("summarize-btn").disabled = false;
+  $("quiz-btn").disabled = false;
 
   scrollPlayer.setTextBlocks(currentDoc.textBlocks);
   voiceReader.setTextBlocks(currentDoc.textBlocks);
@@ -312,6 +314,26 @@ summarizeBtn.addEventListener("click", async () => {
   }
 });
 
+const quizBtn = $("quiz-btn");
+quizBtn.addEventListener("click", async () => {
+  if (!currentDoc) return;
+  const text = currentDoc.textBlocks.map((b) => b.text).join("\n\n");
+  if (!text.trim()) {
+    showToast("Nothing to quiz on yet.");
+    return;
+  }
+
+  setAiOutput("Quiz", "");
+  aiStatus.textContent = "Writing questions…";
+  try {
+    const questions = await generateQuiz(text, { title: currentDoc.title });
+    setAiOutput(`Quiz: ${currentDoc.title}`, questions);
+    aiStatus.textContent = "";
+  } catch (err) {
+    aiStatus.textContent = err.message;
+  }
+});
+
 aiSaveBtn.addEventListener("click", () => {
   notes.append(lastAiHeading, aiOutput.textContent);
   showToast("Saved to notes");
@@ -332,11 +354,23 @@ const exportSpeedSlider = $("export-speed");
 const exportSpeedReadout = $("export-speed-readout");
 const exportSpeedField = $("export-speed-field");
 const exportAnimationSelect = $("export-animation");
+const themeSuggestBtn = $("theme-suggest-btn");
+const themeSuggestionNote = $("theme-suggestion-note");
+const exportChapters = $("export-chapters");
+const exportChaptersText = $("export-chapters-text");
 
 let exportCancelToken = null;
 
+function formatChapterTime(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
 function syncExportSpeedFieldVisibility() {
-  exportSpeedField.hidden = exportAnimationSelect.value === "slides";
+  const value = exportAnimationSelect.value;
+  exportSpeedField.hidden = value === "slides" || value === "highlights";
 }
 
 exportVideoBtn.addEventListener("click", () => {
@@ -351,6 +385,7 @@ exportVideoBtn.addEventListener("click", () => {
   document.querySelector("#export-modal .modal-actions").hidden = false;
   exportLive.hidden = true;
   exportResult.hidden = true;
+  themeSuggestionNote.hidden = true;
   // Default the export's scroll speed to whatever the reading pane is currently set to.
   exportSpeedSlider.value = scrollPlayer.speed;
   exportSpeedReadout.textContent = `${scrollPlayer.speed} px/s`;
@@ -362,6 +397,30 @@ exportMusicToggle.addEventListener("change", () => { exportMusicField.hidden = !
 exportSpeedSlider.addEventListener("input", () => { exportSpeedReadout.textContent = `${exportSpeedSlider.value} px/s`; });
 exportAnimationSelect.addEventListener("change", syncExportSpeedFieldVisibility);
 
+themeSuggestBtn.addEventListener("click", async () => {
+  if (!currentDoc) return;
+  const text = currentDoc.textBlocks.map((b) => b.text).join("\n\n");
+  if (!text.trim()) {
+    showToast("Nothing to analyze yet.");
+    return;
+  }
+  themeSuggestBtn.disabled = true;
+  themeSuggestionNote.hidden = true;
+  try {
+    const { theme, pace, speed } = await suggestTheme(text, { title: currentDoc.title });
+    $("export-theme").value = theme;
+    exportSpeedSlider.value = speed;
+    exportSpeedSlider.dispatchEvent(new Event("input"));
+    const label = theme.charAt(0).toUpperCase() + theme.slice(1);
+    themeSuggestionNote.textContent = `AI suggests: ${label}, ${pace} pace — applied`;
+    themeSuggestionNote.hidden = false;
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    themeSuggestBtn.disabled = false;
+  }
+});
+
 $("export-start-btn").addEventListener("click", async () => {
   exportForm.hidden = true;
   document.querySelector("#export-modal .modal-actions").hidden = true;
@@ -369,20 +428,29 @@ $("export-start-btn").addEventListener("click", async () => {
   exportCancelToken = { cancelled: false };
 
   const musicFile = exportMusicToggle.checked ? $("export-music-file").files[0] || null : null;
+  const animation = exportAnimationSelect.value;
 
   try {
-    const blob = await exportVideo({
+    let highlightSentences = null;
+    if (animation === "highlights") {
+      exportStatus.textContent = "Picking highlights…";
+      const fullText = currentDoc.textBlocks.map((b) => b.text).join("\n\n");
+      highlightSentences = await pickHighlightSentences(fullText, { title: currentDoc.title });
+    }
+
+    const { blob, chapters } = await exportVideo({
       pagesContainer,
       doc: currentDoc,
       previewCanvas: exportCanvas,
       aspect: $("export-aspect").value,
-      animation: exportAnimationSelect.value,
+      animation,
       theme: $("export-theme").value,
       speed: parseFloat(exportSpeedSlider.value),
       wantTitleCard: $("export-title-card").checked,
       wantCaptions: $("export-captions").checked,
       wantMic: $("export-mic").checked,
       musicFile,
+      highlightSentences,
       cancelToken: exportCancelToken,
       onStatus: (msg) => { exportStatus.textContent = msg; },
     });
@@ -395,6 +463,16 @@ $("export-start-btn").addEventListener("click", async () => {
     // whatever the browser actually encoded, rather than assuming webm.
     const ext = blob.type.includes("mp4") ? "mp4" : "webm";
     $("export-download-link").download = `${safeName}.${ext}`;
+
+    if (chapters.length) {
+      exportChaptersText.textContent = chapters
+        .map((c) => `${formatChapterTime(c.timeS)}  ${c.text}`)
+        .join("\n");
+      exportChapters.hidden = false;
+    } else {
+      exportChapters.hidden = true;
+    }
+
     exportLive.hidden = true;
     exportResult.hidden = false;
   } catch (err) {
@@ -406,4 +484,10 @@ $("export-start-btn").addEventListener("click", async () => {
 
 $("export-stop-btn").addEventListener("click", () => {
   if (exportCancelToken) exportCancelToken.cancelled = true;
+});
+
+$("export-chapters-copy-btn").addEventListener("click", () => {
+  navigator.clipboard.writeText(exportChaptersText.textContent)
+    .then(() => showToast("Chapters copied"))
+    .catch(() => showToast("Couldn't copy — select and copy manually"));
 });

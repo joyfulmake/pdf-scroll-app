@@ -33,6 +33,7 @@ const ANIMATIONS = {
   scroll: { name: "Smooth scroll" },
   scrollZoom: { name: "Smooth scroll + slow zoom" },
   slides: { name: "Slide-by-slide (crossfade)" },
+  highlights: { name: "Highlight reel (AI-picked)" },
 };
 
 export { ASPECTS, THEMES, ANIMATIONS };
@@ -266,6 +267,38 @@ function groupIntoSlides(segments, targetChunkHeight) {
   return groups.map((g) => ({ ...g, text: cleanText(g.texts.join(" ")).slice(0, 240) }));
 }
 
+function normalizeForMatch(text) {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// Fuzzy-matches AI-picked (verbatim-requested) sentences back to the document's own
+// rendered segments by normalized substring, and builds groups in the exact shape
+// groupIntoSlides() produces — so animateSlides() can render a highlight reel with
+// zero new rendering code, just a different (AI-curated) set of groups instead of
+// "every segment, chunked to screen-sized pieces." A sentence with no match is
+// skipped, not fatal — the reel just ends up with fewer cards.
+function matchHighlightGroups(segments, sentences) {
+  const groups = [];
+  for (const sentence of sentences) {
+    const needle = normalizeForMatch(sentence).slice(0, 60);
+    if (!needle) continue;
+    const seg = segments.find((s) => {
+      const hay = normalizeForMatch(s.text);
+      return hay.includes(needle) || (needle.length > 20 && needle.includes(hay.slice(0, 60)));
+    });
+    if (!seg) continue;
+    groups.push({
+      pageIndex: seg.pageIndex,
+      pageLocalStartY: seg.pageLocalStartY,
+      pageLocalEndY: seg.pageLocalEndY,
+      texts: [sentence],
+      isKeyword: seg.isKeyword,
+      text: cleanText(sentence).slice(0, 240),
+    });
+  }
+  return groups;
+}
+
 function nativeCropForGroup(rendered, group) {
   const page = rendered[group.pageIndex];
   const nativeScale = page.srcCanvas.height / page.height;
@@ -353,6 +386,45 @@ function contentRevealYs(bands) {
     prevEnd = b.end;
   }
   return reveals;
+}
+
+// Analytic (not simulated frame-by-frame) elapsed-time-to-reach a given scroll
+// offset, under the exact same piecewise gap/content speed model animateScroll's
+// live loop advances through — lets chapter markers be computed once up front in
+// exact seconds, without re-running the animation to find out when things happen.
+function elapsedTimeAtY(targetY, bands, contentSpeed, gapSpeed, reveals) {
+  let elapsed = 0;
+  let prevEnd = 0;
+  for (const b of bands) {
+    if (targetY <= prevEnd) return elapsed;
+    const gapEnd = Math.min(b.start, targetY);
+    if (gapEnd > prevEnd) elapsed += (gapEnd - prevEnd) / gapSpeed;
+    if (targetY <= b.start) return elapsed;
+    const reveal = reveals.find((r) => r.y === b.start);
+    if (reveal) elapsed += reveal.holdMs / 1000;
+    const contentEnd = Math.min(b.end, targetY);
+    elapsed += (contentEnd - b.start) / contentSpeed;
+    if (targetY <= b.end) return elapsed;
+    prevEnd = b.end;
+  }
+  if (targetY > prevEnd) elapsed += (targetY - prevEnd) / gapSpeed;
+  return elapsed;
+}
+
+function computeScrollChapters(segments, bands, contentSpeed, gapSpeed, reveals) {
+  return segments
+    .filter((s) => s.isKeyword)
+    .map((s) => ({ timeS: elapsedTimeAtY(s.startY, bands, contentSpeed, gapSpeed, reveals), text: s.text }));
+}
+
+function computeSlideChapters(groups, dwellTimes) {
+  const chapters = [];
+  let t = 0;
+  groups.forEach((g, i) => {
+    if (g.isKeyword) chapters.push({ timeS: t, text: g.text });
+    t += dwellTimes[i] / 1000 + (i < groups.length - 1 ? SLIDE_TRANSITION_MS / 1000 : 0);
+  });
+  return chapters;
 }
 
 // Content always scrolls at the caller's configured (readable) speed — never slowed
@@ -458,6 +530,13 @@ function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t,
 
 const CONTENT_REVEAL_HOLD_MS = 500;
 const KEYWORD_REVEAL_HOLD_MS = 1600;
+// Shared with computeSlideChapters so chapter timestamps and the actual rendered
+// transition length can never drift apart.
+const SLIDE_TRANSITION_MS = 450;
+// canvas.captureStream() only emits frames on repaint (see paintTitleCard below), so
+// this also has to redraw every frame during its hold — the same value is added as a
+// base offset to every chapter timestamp when a title card precedes the animation.
+const TITLE_CARD_HOLD_MS = 3000;
 // Time constants for easing the scroll speed and the crop/zoom toward their targets
 // instead of snapping — a soft ramp reads as deliberate, an instant jump reads as a
 // glitch. The crop eases more slowly than the speed does: a pan/zoom that settles in
@@ -475,6 +554,9 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
   const durationScale = rawDuration > 0 ? rawDuration / targetDuration : 1;
   const contentSpeed = speed * durationScale;
   const gapSpeed = speed * GAP_SPEED_MULTIPLIER * durationScale;
+  // Computed once up front, before pendingReveals starts getting shift()'d by the
+  // loop below — elapsedTimeAtY reads the full, unmutated reveals list.
+  const chapters = computeScrollChapters(segments, bands, contentSpeed, gapSpeed, pendingReveals);
 
   let offsetY = 0;
   let currentSpeed = speedAt(0, bands, contentSpeed, gapSpeed);
@@ -491,7 +573,7 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
   };
 
   while (true) {
-    if (isCancelled()) return;
+    if (isCancelled()) return chapters;
     const now = performance.now();
     const dt = (now - lastTick) / 1000;
     lastTick = now;
@@ -512,7 +594,7 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
       const holdStart = performance.now();
       let holdLastTick = holdStart;
       while (performance.now() - holdStart < reveal.holdMs) {
-        if (isCancelled()) return;
+        if (isCancelled()) return chapters;
         const holdNow = performance.now();
         easeCrop((holdNow - holdLastTick) / 1000);
         holdLastTick = holdNow;
@@ -529,6 +611,7 @@ async function animateScroll({ ctx, filmstrip, segments, W, H, totalHeight, spee
     if (offsetY >= maxY) break;
     await new Promise((r) => requestAnimationFrame(r));
   }
+  return chapters;
 }
 
 function drawContainFrame(ctx, W, H, srcCanvas, srcY, srcH, theme, alpha = 1) {
@@ -573,23 +656,22 @@ function buildBlurredBackdrop(W, H, srcCanvas, srcY, srcH) {
 // applied by uniformly compressing each slide's dwell time — never stretched, only
 // ever squeezed once the deck as a whole would otherwise run past the target length.
 function scaleDwellTimes(groups) {
-  const TRANSITION_MS = 450;
-  const natural = groups.reduce((s, g) => s + dwellMsFor(g.text, g.isKeyword), 0) + Math.max(0, groups.length - 1) * TRANSITION_MS;
+  const natural = groups.reduce((s, g) => s + dwellMsFor(g.text, g.isKeyword), 0) + Math.max(0, groups.length - 1) * SLIDE_TRANSITION_MS;
   const targetMs = targetDurationFor(natural / 1000) * 1000;
   const scale = natural > 0 ? targetMs / natural : 1;
   return groups.map((g) => clamp(dwellMsFor(g.text, g.isKeyword) * scale, 800, 8000));
 }
 
 async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions, onStatus, isCancelled }) {
-  const TRANSITION_MS = 450;
   const dwellTimes = scaleDwellTimes(groups);
+  const chapters = computeSlideChapters(groups, dwellTimes);
   const backdropFor = (group) => {
     const crop = nativeCropForGroup(rendered, group);
     return buildBlurredBackdrop(W, H, crop.srcCanvas, crop.srcY, crop.srcH);
   };
 
   for (let i = 0; i < groups.length; i++) {
-    if (isCancelled()) return;
+    if (isCancelled()) return chapters;
     const group = groups[i];
     const crop = nativeCropForGroup(rendered, group);
     const backdrop = backdropFor(group);
@@ -598,7 +680,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
     const dwell = dwellTimes[i];
     const holdStart = performance.now();
     while (performance.now() - holdStart < dwell) {
-      if (isCancelled()) return;
+      if (isCancelled()) return chapters;
       ctx.fillStyle = theme.slideBg;
       ctx.fillRect(0, 0, W, H);
       ctx.drawImage(backdrop, 0, 0);
@@ -614,8 +696,8 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
     const nextBackdrop = backdropFor(nextGroup);
     const transStart = performance.now();
     while (true) {
-      if (isCancelled()) return;
-      const t = Math.min(1, (performance.now() - transStart) / TRANSITION_MS);
+      if (isCancelled()) return chapters;
+      const t = Math.min(1, (performance.now() - transStart) / SLIDE_TRANSITION_MS);
       ctx.fillStyle = theme.slideBg;
       ctx.fillRect(0, 0, W, H);
       ctx.save();
@@ -634,6 +716,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
       await new Promise((r) => requestAnimationFrame(r));
     }
   }
+  return chapters;
 }
 
 // Ordered by preference: modern webm/vp9 first, down through older webm variants,
@@ -692,6 +775,7 @@ export async function exportVideo({
   wantCaptions = true,
   wantMic = true,
   musicFile = null,
+  highlightSentences = null,
   cancelToken = { cancelled: false },
   onStatus,
 }) {
@@ -712,6 +796,11 @@ export async function exportVideo({
   let filmstrip = null, totalHeight = 0, slideGroups = null;
   if (animation === "slides") {
     slideGroups = groupIntoSlides(atomicSegments, H);
+  } else if (animation === "highlights") {
+    slideGroups = matchHighlightGroups(atomicSegments, highlightSentences || []);
+    if (!slideGroups.length) {
+      throw new Error("Couldn't build a highlight reel from this document — try a different export mode.");
+    }
   } else {
     ({ filmstrip, totalHeight } = buildFilmstrip(rendered, W));
   }
@@ -770,22 +859,29 @@ export async function exportVideo({
   if (musicNode) musicNode.start();
   onStatus?.("Recording…");
 
+  let chapters = [];
   try {
     if (wantTitleCard && !cancelToken.cancelled) {
-      await paintTitleCard(ctx, W, H, doc.title || "Document", theme, 3000, () => cancelToken.cancelled);
+      await paintTitleCard(ctx, W, H, doc.title || "Document", theme, TITLE_CARD_HOLD_MS, () => cancelToken.cancelled);
     }
     if (!cancelToken.cancelled) {
-      if (animation === "slides") {
-        await animateSlides({
+      if (animation === "slides" || animation === "highlights") {
+        const slideChapters = await animateSlides({
           ctx, rendered, groups: slideGroups, W, H, theme, wantCaptions, onStatus,
           isCancelled: () => cancelToken.cancelled,
         });
+        // A highlight reel is already nothing but highlights — it doesn't need its
+        // own chapter list pointing at itself.
+        if (animation === "slides") chapters = slideChapters;
       } else {
-        await animateScroll({
+        chapters = await animateScroll({
           ctx, filmstrip, segments: atomicSegments, W, H, totalHeight, speed, style: animation, theme, wantCaptions, onStatus,
           isCancelled: () => cancelToken.cancelled,
         });
       }
+    }
+    if (wantTitleCard) {
+      chapters = chapters.map((c) => ({ ...c, timeS: c.timeS + TITLE_CARD_HOLD_MS / 1000 }));
     }
   } finally {
     recorder.stop();
@@ -795,5 +891,5 @@ export async function exportVideo({
     if (audioCtx) await audioCtx.close();
   }
 
-  return new Blob(chunks, { type: mimeType });
+  return { blob: new Blob(chunks, { type: mimeType }), chapters };
 }

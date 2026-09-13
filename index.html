@@ -149,6 +149,9 @@
               </select>
               <button id="summarize-btn" class="btn small" disabled>Summarize</button>
             </div>
+            <div class="quiz-row">
+              <button id="quiz-btn" class="btn small" disabled>🧠 Quiz me</button>
+            </div>
           </div>
         </div>
 
@@ -263,6 +266,7 @@
             <option value="scroll">Smooth scroll</option>
             <option value="scrollZoom">Smooth scroll + slow zoom</option>
             <option value="slides">Slide-by-slide (crossfade)</option>
+            <option value="highlights">Highlight reel (AI-picked, ~20-30s)</option>
           </select>
         </label>
         <label class="field">
@@ -274,6 +278,10 @@
             <option value="mono">Mono (grayscale, corporate)</option>
             <option value="cyberpunk">Cyberpunk (neon, high-energy)</option>
           </select>
+          <div class="theme-suggest-row">
+            <button type="button" id="theme-suggest-btn" class="btn small">✨ Suggest</button>
+            <span id="theme-suggestion-note" class="muted small" hidden></span>
+          </div>
         </label>
         <label class="field" id="export-speed-field">
           Scroll speed <span id="export-speed-readout" class="muted small">40 px/s</span>
@@ -303,6 +311,13 @@
 
       <div id="export-result" hidden>
         <video id="export-preview-video" controls></video>
+        <div id="export-chapters" hidden>
+          <div class="ai-panel-header">
+            <h3>Chapters</h3>
+            <button id="export-chapters-copy-btn" class="btn small">Copy</button>
+          </div>
+          <div id="export-chapters-text" class="ai-output"></div>
+        </div>
         <div class="modal-actions">
           <a id="export-download-link" class="btn primary" download="reading-video.webm">⬇ Download video</a>
           <button id="export-close-btn" class="btn">Close</button>
