@@ -421,6 +421,23 @@ function cropTargetAt(y, bands) {
   return { center: 0.5, zoom: 1 };
 }
 
+// A small, low-opacity corner credit — not a loud logo overlay, just enough that
+// someone watching a shared video knows what made it. A soft drop shadow keeps it
+// legible over both light and dark page content without needing per-theme colors.
+function drawWatermark(ctx, W, H) {
+  const text = "pdf-scroll-app.pages.dev";
+  const fontSize = Math.round(W * 0.016);
+  ctx.save();
+  ctx.font = `500 ${fontSize}px -apple-system, sans-serif`;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "bottom";
+  ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
+  ctx.shadowBlur = Math.round(W * 0.006);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+  ctx.fillText(text, W - W * 0.025, H - H * 0.02);
+  ctx.restore();
+}
+
 function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t, theme, wantCaptions, segments, cropCenter, cropZoom }) {
   ctx.clearRect(0, 0, W, H);
   const extraZoom = style === "scrollZoom" ? 1 + t * (KEN_BURNS_MAX - 1) : 1;
@@ -435,6 +452,7 @@ function drawScrollFrame({ ctx, filmstrip, W, H, totalHeight, offsetY, style, t,
     const seg = segments.find((s) => focusY >= s.startY && focusY < s.endY) || segments[segments.length - 1];
     drawCaption(ctx, W, H, theme, seg?.text, seg?.isKeyword);
   }
+  drawWatermark(ctx, W, H);
 }
 
 const CONTENT_REVEAL_HOLD_MS = 500;
@@ -585,6 +603,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
       ctx.drawImage(backdrop, 0, 0);
       drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme);
       if (wantCaptions) drawCaption(ctx, W, H, theme, group.text, group.isKeyword);
+      drawWatermark(ctx, W, H);
       await new Promise((r) => requestAnimationFrame(r));
     }
 
@@ -609,6 +628,7 @@ async function animateSlides({ ctx, rendered, groups, W, H, theme, wantCaptions,
       drawContainFrame(ctx, W, H, crop.srcCanvas, crop.srcY, crop.srcH, theme, 1 - t);
       drawContainFrame(ctx, W, H, nextCrop.srcCanvas, nextCrop.srcY, nextCrop.srcH, theme, t);
       if (wantCaptions) drawCaption(ctx, W, H, theme, t < 0.5 ? group.text : nextGroup.text, t < 0.5 ? group.isKeyword : nextGroup.isKeyword);
+      drawWatermark(ctx, W, H);
       if (t >= 1) break;
       await new Promise((r) => requestAnimationFrame(r));
     }
